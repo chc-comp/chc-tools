@@ -1,0 +1,3 @@
+[submodule "ddSMT"]
+	path = ddSMT
+	url = https://github.com/agurfinkel/ddSMT
