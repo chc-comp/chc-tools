@@ -25,7 +25,6 @@ class ChcRulesSmtLibParser(SmtLibZ3Parser):
         self.commands["query"] = self._cmd_query
 
         # Remove unused commands
-        del self.commands["check-sat"]
         del self.commands["get-value"]
         # ...
 
