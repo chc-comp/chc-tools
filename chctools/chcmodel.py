@@ -9,6 +9,10 @@ import pysmt.solvers.z3 as pyz3
 
 from pysmt.smtlib.parser import SmtLibZ3Parser, SmtLibCommand
 
+import logging
+
+log = logging.getLogger(__name__)
+
 def define_fun_to_lambda(env, cmd):
     converter = pyz3.Z3Converter(env, z3.get_ctx(None))
     name, params, ret_sort, body = cmd.args
@@ -18,6 +22,7 @@ def define_fun_to_lambda(env, cmd):
     return res
 
 def load_model_from_file(fname):
+    log.info('Loading model file {}'.format(fname))
     model = FolModel()
     with open(fname, 'r') as script:
         parser = SmtLibZ3Parser()
@@ -53,13 +58,13 @@ class ModelValidator(object):
             if res == z3.unsat:
                 pass
             else:
-                print('Failed to validate a rule')
-                print(r)
+                log.warning('Failed to validate a rule')
+                log.warning(r)
                 if res == z3.sat:
-                    print('Model is')
-                    print(s.model())
+                    log.warning('Model is')
+                    log.warning(s.model())
                 else:
-                    print('Incomplete solver')
+                    log.warning('Incomplete solver')
 
             return res == z3.unsat
 
@@ -92,5 +97,6 @@ class ChcModelCmd(CliCmd):
         return 0 if res else 1;
 
 if __name__ == '__main__':
+    #logging.basicConfig(level=logging.INFO)
     cmd = ChcModelCmd()
     sys.exit(cmd.main(sys.argv[1:]))
