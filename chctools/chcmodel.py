@@ -2,6 +2,7 @@
 import sys
 from .core import CliCmd, add_in_out_args
 from .horndb import HornClauseDb, HornRule, FolModel, load_horn_db_from_file
+from .solver_utils import pushed_solver
 
 import z3
 import pysmt.solvers.z3 as pyz3
@@ -17,7 +18,6 @@ def define_fun_to_lambda(env, cmd):
     return res
 
 def load_model_from_file(fname):
-    print(fname)
     model = FolModel()
     with open(fname, 'r') as script:
         parser = SmtLibZ3Parser()
@@ -26,7 +26,6 @@ def load_model_from_file(fname):
                 name = cmd.args[0]
                 lmbd = define_fun_to_lambda(parser.env, cmd)
                 model[name] = lmbd
-                print(cmd)
     return model
 
 
@@ -37,34 +36,32 @@ class ModelValidator(object):
         self._solver = z3.Solver()
 
     def _validate_rule(self, r):
-        s = self._solver
-        s.push()
+        with pushed_solver(self._solver) as s:
 
-        uninterp_sz = r.uninterp_size()
-        for idx, term in enumerate(r.body()):
-            if idx < uninterp_sz:
-                s.add(self._model.eval(term))
+            uninterp_sz = r.uninterp_size()
+            for idx, term in enumerate(r.body()):
+                if idx < uninterp_sz:
+                    s.add(self._model.eval(term))
+                else:
+                    s.add(term)
+
+            if not r.is_query():
+                t = self._model.eval(r.head())
+                s.add(z3.Not(t))
+
+            res = s.check()
+            if res == z3.unsat:
+                pass
             else:
-                s.add(term)
+                print('Failed to validate a rule')
+                print(r)
+                if res == z3.sat:
+                    print('Model is')
+                    print(s.model())
+                else:
+                    print('Incomplete solver')
 
-        if not r.is_query():
-            t = self._model.eval(r.head())
-            s.add(z3.Not(t))
-
-        res = s.check()
-        if res == z3.unsat:
-            pass
-        else:
-            print('Failed to validate a rule')
-            print(r)
-            if res == z3.sat:
-                print('Model is')
-                print(s.model())
-            else:
-                print('Incomplete solver')
-
-        s.pop()
-        return res == z3.unsat
+            return res == z3.unsat
 
     def validate(self):
         res = True
