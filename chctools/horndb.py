@@ -143,6 +143,7 @@ class HornClauseDb(object):
         out = io.StringIO()
         for r in self._rules:
             out.write(str(r))
+            out.write('\n')
         out.write('\n')
         for q in self._queries:
             out.write(str(q))
@@ -153,12 +154,17 @@ def load_horn_db_from_file(fname):
     fp = z3.Fixedpoint()
     queries = fp.parse_file(fname)
     db = HornClauseDb(fname)
-    for r in fp.get_rules():
-        rule = HornRule(r)
-        db.add_rule(rule)
-    for q in queries:
-        rule = HornRule(z3.Implies(q, z3.BoolVal(False)))
-        db.add_rule(rule)
+    if len(queries) > 0:
+        for r in fp.get_rules():
+            rule = HornRule(r)
+            db.add_rule(rule)
+        for q in queries:
+            rule = HornRule(z3.Implies(q, z3.BoolVal(False)))
+            db.add_rule(rule)
+    else:
+        for a in fp.get_assertions():
+            rule = HornRule(a)
+            db.add_rule(rule)
 
     db.seal()
     return db
