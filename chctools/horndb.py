@@ -104,6 +104,9 @@ class HornRule(object):
     def body(self):
         return self._body
 
+    def uninterp_size(self):
+        return self._uninterp_sz
+
     def has_formula(self):
         return self._formula is not None
 
@@ -215,6 +218,36 @@ class HornClauseDb(object):
                 fp.add_rule(r.mk_formula())
 
         return fp
+
+class FolModel(object):
+    def __init__(self):
+        self._fn_interps = dict()
+
+    def add_fn(self, name, lmbd):
+        self._fn_interps[name] = lmbd
+
+    def has_interp(self, name):
+        return name in self._fn_interps.keys()
+
+    def __setitem__(self, key, val):
+        self.add_fn(key, val)
+
+    def get_fn(self, name):
+        return self._fn_interps[name]
+
+    def eval(self, term):
+        fn = self.get_fn(term.decl().name())
+        # lambdas seem to be broken at the moment
+        # this is a work around
+        body = fn.body()
+        body = z3.substitute_vars(body, *reversed(term.children()))
+        return body
+
+
+    def __str__(self):
+        return str(self._fn_interps)
+    def __repr__(self):
+        return reper(self._fn_interps)
 
 def load_horn_db_from_file(fname):
     fp = z3.Fixedpoint()
