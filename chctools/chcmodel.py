@@ -34,25 +34,47 @@ class ModelValidator(object):
     def __init__(self, db, model):
         self._db = db
         self._model = model
+        self._solver = z3.Solver()
 
     def _validate_rule(self, r):
+        s = self._solver
+        s.push()
+
         uninterp_sz = r.uninterp_size()
         for idx, term in enumerate(r.body()):
             if idx < uninterp_sz:
-                print(self._model.eval(term))
+                s.add(self._model.eval(term))
             else:
-                print(term)
+                s.add(term)
 
         if not r.is_query():
-            print('head is',self._model.eval(r.head()))
-        print('expect unsat')
+            t = self._model.eval(r.head())
+            s.add(z3.Not(t))
 
+        res = s.check()
+        if res == z3.unsat:
+            pass
+        else:
+            print('Failed to validate a rule')
+            print(r)
+            if res == z3.sat:
+                print('Model is')
+                print(s.model())
+            else:
+                print('Incomplete solver')
+
+        s.pop()
+        return res == z3.unsat
 
     def validate(self):
+        res = True
         for r in self._db.get_rules():
-            self._validate_rule(r)
+            v = self._validate_rule(r)
+            res = res and v
         for q in self._db.get_queries():
-            self._validate_rule(r)
+            v = self._validate_rule(r)
+            res = res and v
+        return res
 
 class ChcModelCmd(CliCmd):
     def __init__(self):
@@ -69,8 +91,8 @@ class ChcModelCmd(CliCmd):
         db = load_horn_db_from_file(args.in_file)
         model = load_model_from_file(args.model_file)
         validator = ModelValidator(db, model)
-        validator.validate()
-        return 0
+        res = validator.validate()
+        return 0 if res else 1;
 
 if __name__ == '__main__':
     cmd = ChcModelCmd()
