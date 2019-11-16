@@ -37,14 +37,16 @@ def find_all_uninterp_consts(formula, res):
 class HornRule(object):
     def __init__(self, formula):
         self._formula = formula
-        self._update()
-
-    def _update(self):
         self._head = None
         self._body = []
         self._uninterp_sz = 0
         self._bound_constants = []
 
+        self._update()
+
+    def _update(self):
+        if not self.has_formula():
+            return
 
         rels = list()
         find_all_uninterp_consts(self._formula, rels)
@@ -102,6 +104,33 @@ class HornRule(object):
     def body(self):
         return self._body
 
+    def has_formula(self):
+        return self._formula is not None
+
+    def get_formula(self):
+        return self._formula
+
+    def mk_formula(self):
+        f = self._body
+        if len(f) == 0:
+            f = z3.BoolVal(True)
+        else:
+            f = z3.And(f)
+        f = z3.Implies(f, self._head)
+
+        if len(self._bound_constants) > 0:
+            f = z3.ForaAll(self._bound_constants, f)
+        self._formula = f
+        return self._formula
+
+    def mk_query(self):
+        assert(self.is_query())
+        f = self._body
+        assert(len(f) > 0)
+        f = z3.And(f)
+        if len(self._bound_constants) > 0:
+            f = z3.Exists(self._bound_constants, f)
+        return f
 
 class HornClauseDb(object):
     def __init__(self, name = 'horn'):
@@ -110,6 +139,7 @@ class HornClauseDb(object):
         self._queries = []
         self._rels = frozenset()
         self._sealed = True
+        self._fp = False
 
     def add_rule(self, horn_rule):
         self._sealed = False
@@ -149,26 +179,49 @@ class HornClauseDb(object):
             out.write(str(q))
         return out.getvalue()
 
+    def load_from_fp(self, fp, queries):
+        self._fp = fp
+        if len(queries) > 0:
+            for r in fp.get_rules():
+                rule = HornRule(r)
+                self.add_rule(rule)
+            for q in queries:
+                rule = HornRule(z3.Implies(q, z3.BoolVal(False)))
+                self.add_rule(rule)
+        else:
+            # fixedpoit object is not properly loaded, ignore it
+            self._fp = None
+            for a in fp.get_assertions():
+                rule = HornRule(a)
+                self.add_rule(rule)
+        self.seal()
+
+    def has_fixedpoint(self):
+        return self._fp is not None
+    def get_fixedpoint(self):
+        return self._fp
+
+    def mk_fixedpoint(self, fp = None):
+        if fp is None:
+            self._fp = z3.Fixedpoint()
+            fp = self._fp
+
+        for rel in self._rels:
+            fp.register_relation(rel)
+        for r in self._rules:
+            if r.has_formula():
+                fp.add_rule(r.get_formula())
+            else:
+                fp.add_rule(r.mk_formula())
+
+        return fp
 
 def load_horn_db_from_file(fname):
     fp = z3.Fixedpoint()
     queries = fp.parse_file(fname)
     db = HornClauseDb(fname)
-    if len(queries) > 0:
-        for r in fp.get_rules():
-            rule = HornRule(r)
-            db.add_rule(rule)
-        for q in queries:
-            rule = HornRule(z3.Implies(q, z3.BoolVal(False)))
-            db.add_rule(rule)
-    else:
-        for a in fp.get_assertions():
-            rule = HornRule(a)
-            db.add_rule(rule)
-
-    db.seal()
+    db.load_from_fp(fp, queries)
     return db
-
 
 def main():
     db = load_horn_db_from_file(sys.argv[1])

@@ -1,34 +1,40 @@
 ### pretty printer
 import sys
 from .core import CliCmd, add_in_out_args
+from .horndb import HornClauseDb, HornRule, load_horn_db_from_file
 
 import z3
 
-def load_fp_from_file(fname):
-    fp = z3.Fixedpoint()
-    q = fp.parse_file(fname)
-    return (fp, q)
-
-def pp_rules(fp, queries, out):
+def pp_chc_as_rules(db, out):
+    fp = None
+    if db.has_fixedpoint():
+        fp = db.get_fixedpoint()
+    else:
+        fp = z3.Fixedpoint()
+        db.mk_fixedpoint(fp=fp)
     fp.set('print_fixedpoint_extensions', True)
     print('(set-logic ALL)', file=out)
     out.write(fp.sexpr())
-    for q in queries:
-        out.write('(query {})\n'.format(q))
+    for q in db.get_queries():
+        fml = q.mk_query()
+        out.write('(query {})\n'.format(fml.sexpr()))
 
-def pp_chc(fp, queries, out):
+def pp_chc_as_smt(db, out):
+    fp = z3.Fixedpoint()
+    db.mk_fixedpoint(fp=fp)
     fp.set('print_fixedpoint_extensions', False)
-    #print('(set-logic HORN)', file=out)
     out.write(fp.sexpr())
-    for q in queries:
-        out.write('(assert {})\n'.format(z3.Implies(q, z3.BoolVal(False)).sexpr()))
+    for q in db.get_queries():
+        assert(q.has_formula())
+        fml = q.get_formula()
+        out.write('(assert {})\n'.format(fml.sexpr()))
     out.write('(check-sat)\n')
 
-def pp_fp(fp, q, out, format='rules'):
+def pp_chc(db, out, format='rules'):
     if format == 'rules':
-        pp_rules(fp, q, out)
+        pp_chc_as_rules(db, out)
     else:
-        pp_chc(fp, q, out)
+        pp_chc_as_smt(db, out)
 
 class ChcPpCmd(CliCmd):
     def __init__(self):
@@ -44,9 +50,9 @@ class ChcPpCmd(CliCmd):
         return ap
 
     def run(self, args, extra):
-        fp, queries = load_fp_from_file(args.in_file)
+        db = load_horn_db_from_file(args.in_file)
         with open(args.out_file, 'w') as out:
-            pp_fp(fp, queries, out, format=args.format)
+            pp_chc(db, out, format=args.format)
 
         return 0
 
