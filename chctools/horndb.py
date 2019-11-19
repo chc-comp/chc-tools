@@ -2,6 +2,9 @@ import sys
 import z3
 import io
 
+import pysmt.environment
+import pysmt.solvers.z3 as pyz3
+
 def ground_quantifier(qexpr):
     body = qexpr.body()
 
@@ -135,12 +138,61 @@ class HornRule(object):
             f = z3.Exists(self._bound_constants, f)
         return f
 
+class HornRelation(object):
+    def __init__(self, fdecl):
+        self._fdecl = fdecl
+        self._sig =  []
+        self._pysmt_sig = []
+
+        self._update()
+
+    def _update(self):
+        self._sig = []
+        for i in range(self._fdecl.arity()):
+            name = self._mk_name(i)
+            sort = self._fdecl.domain(i)
+            self._sig.append(z3.Const(name, sort))
+
+
+        # compute pysmt version of the signature
+        env = pysmt.environment.get_env()
+        mgr = env.formula_manager
+        ctx = z3.get_ctx(None)
+        converter = pyz3.Z3Converter(env, ctx)
+        self._pysmt_sig = [mgr.Symbol(v.decl().name(),
+                                      converter._z3_to_type(v.sort())) for v in self._sig]
+
+    def _mk_name(self, i):
+        # overwrite to have different naming scheme
+        return "{}_{}_n".format(self.name(), i)
+
+    def name(self):
+        return str(self._fdecl.name())
+
+    def __str__(self):
+        return repr(self)
+
+    def __repr__(self):
+        import io
+        out = io.StringIO()
+        out.write(str(self.name()))
+        out.write("(")
+        for v in self._pysmt_sig:
+            out.write(str(v))
+            out.write(', ')
+        out.write(")")
+        return out.getvalue()
+
+    def pysmt_parse_lemma(self):
+        return None
+
 class HornClauseDb(object):
     def __init__(self, name = 'horn'):
         self._name = name
         self._rules = []
         self._queries = []
-        self._rels = frozenset()
+        self._rels_set = frozenset()
+        self._rels = dict()
         self._sealed = True
         self._fp = False
 
@@ -153,7 +205,7 @@ class HornClauseDb(object):
 
     def get_rels(self):
         self.seal()
-        return self._rels
+        return self._rels_set
 
     def get_rules(self):
         return self._rules
@@ -169,8 +221,11 @@ class HornClauseDb(object):
             rels.extend(r.used_rels())
         for q in self._queries:
             rels.extend(r.used_rels())
-        self._rels = frozenset(rels)
+        self._rels_set = frozenset(rels)
         self._sealed = True
+
+        for rel in self._rels_set:
+            self._rels[str(rel.name())] = HornRelation(rel)
 
     def __str__(self):
         out = io.StringIO()
@@ -209,7 +264,7 @@ class HornClauseDb(object):
             self._fp = z3.Fixedpoint()
             fp = self._fp
 
-        for rel in self._rels:
+        for rel in self._rels_set:
             fp.register_relation(rel)
         for r in self._rules:
             if r.has_formula():
@@ -260,6 +315,7 @@ def main():
     db = load_horn_db_from_file(sys.argv[1])
     print(db)
     print(db.get_rels())
+    print(db._rels)
     return 0
 if __name__ == '__main__':
     sys.exit(main())
