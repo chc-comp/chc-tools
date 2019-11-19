@@ -4,6 +4,7 @@ import io
 
 import pysmt.environment
 import pysmt.solvers.z3 as pyz3
+from pysmt.smtlib.parser import SmtLibZ3Parser, Tokenizer
 
 def ground_quantifier(qexpr):
     body = qexpr.body()
@@ -143,13 +144,14 @@ class HornRelation(object):
         self._fdecl = fdecl
         self._sig =  []
         self._pysmt_sig = []
+        self._lemma_parser = None
 
         self._update()
 
     def _update(self):
         self._sig = []
         for i in range(self._fdecl.arity()):
-            name = self._mk_name(i)
+            name = self._mk_arg_name(i)
             sort = self._fdecl.domain(i)
             self._sig.append(z3.Const(name, sort))
 
@@ -162,8 +164,12 @@ class HornRelation(object):
         self._pysmt_sig = [mgr.Symbol(v.decl().name(),
                                       converter._z3_to_type(v.sort())) for v in self._sig]
 
-    def _mk_name(self, i):
-        # overwrite to have different naming scheme
+    def _mk_arg_name(self, i):
+        # can be arbitrary convenient name
+        return "{}_{}_n".format(self.name(), i)
+
+    def _mk_lemma_arg_name(self, i):
+        # must match name used in the lemma
         return "{}_{}_n".format(self.name(), i)
 
     def name(self):
@@ -183,8 +189,19 @@ class HornRelation(object):
         out.write(")")
         return out.getvalue()
 
-    def pysmt_parse_lemma(self):
-        return None
+    def _mk_lemma_parser(self):
+        if self._lemma_parser is not None:
+            return
+        self._lemma_parser = SmtLibZ3Parser()
+        # register symbols that are expected to appear in the lemma
+        for i, symbol in enumerate(self._pysmt_sig):
+            name = self._mk_lemma_arg_name(i)
+            self._lemma_parser.cache.bind(name, symbol)
+
+    def pysmt_parse_lemma(self, input):
+        self._mk_lemma_parser()
+        tokens = Tokenizer(input, interactive = False)
+        return self._lemma_parser.get_expression(tokens)
 
 class HornClauseDb(object):
     def __init__(self, name = 'horn'):
@@ -207,6 +224,10 @@ class HornClauseDb(object):
         self.seal()
         return self._rels_set
 
+    def has_rel(self, rel_name):
+        return rel_name in self._rels.keys()
+    def get_rel(self, rel_name):
+        return self._rels[rel_name]
     def get_rules(self):
         return self._rules
     def get_queries(self):
@@ -316,6 +337,13 @@ def main():
     print(db)
     print(db.get_rels())
     print(db._rels)
+    rel = db.get_rel('main@_bb723')
+    lemma_stream = io.StringIO('(=> (< main@_bb723_0_n 1) (>= (+ main@_bb723_4_n main@_bb723_5_n) 0))')
+    lemma = rel.pysmt_parse_lemma(lemma_stream)
+    print(lemma)
+    print(lemma._content._asdict())
+    #import json
+    #json.dumps(lemma._content._asdict())
     return 0
 if __name__ == '__main__':
     sys.exit(main())
