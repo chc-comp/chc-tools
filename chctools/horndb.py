@@ -134,7 +134,10 @@ class HornRule(object):
         assert(self.is_query())
         f = self._body
         assert(len(f) > 0)
-        f = z3.And(f)
+        if len(f) == 1:
+            f = f[0]
+        else:
+            f = z3.And(f)
         if len(self._bound_constants) > 0:
             f = z3.Exists(self._bound_constants, f)
         return f
