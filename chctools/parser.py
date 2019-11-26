@@ -7,6 +7,7 @@ import collections
 from pysmt.smtlib.parser import SmtLibZ3Parser, SmtLibCommand
 from pysmt.exceptions import UnknownSmtLibCommandError, PysmtValueError, PysmtSyntaxError
 
+from pysmt.constants import Fraction
 import pysmt.operators as op
 import pysmt.typing as types
 
