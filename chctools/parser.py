@@ -6,7 +6,7 @@ import collections
 
 from pysmt.smtlib.parser import SmtLibZ3Parser, SmtLibCommand
 from pysmt.exceptions import UnknownSmtLibCommandError, PysmtValueError, PysmtSyntaxError
-
+from pysmt.constants import Fraction
 import pysmt.operators as op
 import pysmt.typing as types
 
@@ -112,7 +112,6 @@ class ChcRulesSmtLibParser(SmtLibZ3Parser):
                     queries.append(cmd.formula)
                 else:
                     rules.append(cmd.formula)
-
         return rules, queries 
 
 def main():
