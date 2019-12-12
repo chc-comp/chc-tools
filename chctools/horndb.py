@@ -93,6 +93,45 @@ class HornRule(object):
     def is_query(self):
         return z3.is_false(self._head)
 
+    def is_simple_query(self):
+        """Returns true if query is a simple.
+
+        A simple query is an application of an uninterprted predicate
+
+        """
+        if not self.is_query():
+            return False
+
+        if len(self.body()) != 1:
+            return False
+
+        if self.uninterp_size() != 1:
+            return False;
+
+        return True
+
+
+    ### based on the following inference
+    ###
+    ### forall v :: (expr ==> false)
+    ###
+    ### equivalent to 
+    ###
+    ### forall v:: ( expr ==> q ) && forall v :: ( q ==> false )
+    ###
+    def split_query(self):
+        """Split query if it is not simple into a query and a rule"""
+
+        assert(self.is_query())
+        if self.is_simple_query():
+            return (self, None)
+
+        q = z3.Bool("simple!!query")
+        query = HornRule(z3.Implies(q, z3.BoolVal(False)))
+        rule = HornRule(z3.ForAll(self._bound_constants,
+                                  z3.Implies(z3.And(*self.body()), q)))
+        return query, rule
+
     def is_fact(self):
         return self._uninterp_sz == 0
 
@@ -165,7 +204,8 @@ class HornRelation(object):
         ctx = z3.get_ctx(None)
         converter = pyz3.Z3Converter(env, ctx)
         self._pysmt_sig = [mgr.Symbol(v.decl().name(),
-                                      converter._z3_to_type(v.sort())) for v in self._sig]
+                                      converter._z3_to_type(v.sort()))
+                           for v in self._sig]
 
     def _mk_arg_name(self, i):
         # can be arbitrary convenient name
@@ -207,7 +247,7 @@ class HornRelation(object):
         return self._lemma_parser.get_expression(tokens)
 
 class HornClauseDb(object):
-    def __init__(self, name = 'horn'):
+    def __init__(self, name = 'horn', simplify_queries = True):
         self._name = name
         self._rules = []
         self._queries = []
@@ -216,10 +256,17 @@ class HornClauseDb(object):
         self._sealed = True
         self._fp = False
 
+        self._simple_query = simplify_queries
+
     def add_rule(self, horn_rule):
         self._sealed = False
         if horn_rule.is_query():
-            self._queries.append(horn_rule)
+            if self._simple_query and not horn_rule.is_simple_query():
+                query, rule = horn_rule.split_query()
+                self._rules.append(rule)
+                self._queries.append(query)
+            else:
+                self._queries.append(horn_rule)
         else:
             self._rules.append(horn_rule)
 
