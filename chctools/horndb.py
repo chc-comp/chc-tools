@@ -102,20 +102,29 @@ class HornRule(object):
         if not self.is_query():
             return False
 
-        if len(self.body()) != 1:
-            return False
-
         if self.uninterp_size() != 1:
             return False;
 
-        return True
+        predicate = self.body()[0]
 
+        if predicate.num_args() > 0:
+            return False
+
+        _body = self.body()[1:];
+        if len(_body) == 0:
+            return True
+
+        if len(_body) == 1:
+            return z3.is_true(_body[0])
+
+        _body = z3.simplify(z3.And(*_body))
+        return z3.is_true(_body)
 
     ### based on the following inference
     ###
     ### forall v :: (expr ==> false)
     ###
-    ### equivalent to 
+    ### equivalent to
     ###
     ### forall v:: ( expr ==> q ) && forall v :: ( q ==> false )
     ###
