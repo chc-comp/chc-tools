@@ -80,6 +80,10 @@ class HornRule(object):
             else:
                 break
 
+        # reset _formula, it can be re-computed using mk_formula()
+        # this ensures that any simplifications that are done during _update() are
+        # also reflected in the formula view
+        self._formula = None
         assert(self._head is not None)
 
     def __str__(self):
