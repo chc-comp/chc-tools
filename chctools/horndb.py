@@ -70,6 +70,9 @@ class HornRule(object):
             self._head = body
             body = []
 
+        # remove all true constants
+        body = [x for x in body if not z3.is_true(x)]
+
         if len(body) > 0:
             self._body = body
 
