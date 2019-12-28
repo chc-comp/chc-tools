@@ -174,7 +174,7 @@ class HornRule(object):
         f = z3.Implies(f, self._head)
 
         if len(self._bound_constants) > 0:
-            f = z3.ForaAll(self._bound_constants, f)
+            f = z3.ForAll(self._bound_constants, f)
         self._formula = f
         return self._formula
 
