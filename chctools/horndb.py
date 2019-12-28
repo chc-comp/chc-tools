@@ -180,12 +180,15 @@ class HornRule(object):
 
     def mk_query(self):
         assert(self.is_query())
-        f = self._body
-        assert(len(f) > 0)
-        if len(f) == 1:
-            f = f[0]
+        assert(len(self.body()) > 0)
+        _body = self.body()
+        if self.is_simple_query():
+            return _body[0]
+
+        if len(_body) == 1:
+            f = _body[0]
         else:
-            f = z3.And(f)
+            f = z3.And(_body)
         if len(self._bound_constants) > 0:
             f = z3.Exists(self._bound_constants, f)
         return f
