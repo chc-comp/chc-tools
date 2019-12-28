@@ -176,6 +176,8 @@ class HornRule(object):
         f = self._body
         if len(f) == 0:
             f = z3.BoolVal(True)
+        elif len(f) == 1:
+            f = f[0]
         else:
             f = z3.And(f)
         f = z3.Implies(f, self._head)
