@@ -10,7 +10,7 @@ import scala.collection.JavaConverters._
 /**
  * Verify that an SMT-LIB script is in the CHC-COMP fragment.
  */
-object Checker {
+class AbstractChecker {
 
   val printer = new PrettyPrinterNonStatic
 
@@ -108,17 +108,30 @@ object Checker {
 
     def + : SMTLIBElementSeq =
       this ++ this.*
+
+    def ? : SMTLIBElementSeq = {
+      val sthis = this
+      new SMTLIBElementSeq {
+        def checkList(t : List[AnyRef]) : Either[List[AnyRef], Int] =
+          sthis.checkList(t) match {
+            case Left(r)  => Left(r)
+            case Right(_) => Left(t)
+          }
+      }
+    }
   }
 
   //////////////////////////////////////////////////////////////////////////////
 
   object Script extends SMTLIBElement {
-    val commands = SetLogic.asSeq ++
+    val commands = SetInfo.asSeq.* ++
+                   SetLogic.asSeq ++
                    SetInfo.asSeq.* ++
                    FunDecl.asSeq.* ++
                    CHCAssert.asSeq.* ++
                    CHCQuery.asSeq ++
-                   CheckSat.asSeq
+                   CheckSat.asSeq ++
+                   Exit.asSeq.?
 
     def check(t : AnyRef) : Boolean = t match {
       case t : Script =>
@@ -172,15 +185,31 @@ object Checker {
     }
   }
 
-  object FunDecl extends SMTLIBElement {
+  object Exit extends SMTLIBElement {
     def check(t : AnyRef) : Boolean = t match {
-      case c : FunctionDeclCommand =>
-        (printer print c.sort_) == "Bool"
-        // TODO: check argument sorts
+      case c : ExitCommand =>
+        true
       case _ =>
         false
     }
   }
+
+  object FunDecl extends SMTLIBElement {
+    def check(t : AnyRef) : Boolean = t match {
+      case c : FunctionDeclCommand =>
+        (printer print c.sort_) == "Bool" &&
+        (c.mesorts_ match {
+           case d : SomeSorts =>
+             AcceptedSort.asSeq.* checkJavaList d.listsort_
+           case _ : NoSorts =>
+             true
+         })
+      case _ =>
+        false
+    }
+  }
+
+  val AcceptedSort : SMTLIBElement = AnySMTLIBElement
 
   case class FunExpression(op : String,
                            argsCheck : SMTLIBElementSeq) extends SMTLIBElement {
@@ -239,8 +268,7 @@ object Checker {
   object VarDecl extends SMTLIBElement {
     def check(t : AnyRef) : Boolean = t match {
       case c : SortedVariable =>
-        true
-        // TODO: check variable sort
+        AcceptedSort.check(c.sort_)
       case _ =>
         false
     }
@@ -312,5 +340,36 @@ object Checker {
       }
     }
   }
+
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+object Checker extends AbstractChecker
+
+class AbstractLIAChecker extends AbstractChecker {
+
+  val possibleSorts = Set("Int", "Bool")
+
+  override val AcceptedSort : SMTLIBElement = new SMTLIBElement {
+    def check(t : AnyRef) : Boolean = t match {
+      case s : Sort =>
+        possibleSorts contains (printer print s)
+      case _ =>
+        false
+    }
+  }
+
+}
+
+object LIAChecker extends AbstractLIAChecker
+
+object LIALinChecker extends AbstractLIAChecker {
+
+  override val CHCTail =
+    PredAtom |
+    InterpretedFormula |
+    FunExpression("and",
+                  PredAtom.asSeq.? ++ InterpretedFormula.asSeq.*)
 
 }
