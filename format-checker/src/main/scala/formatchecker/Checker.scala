@@ -16,6 +16,10 @@ class AbstractChecker {
 
   def main(args: Array[String]) : Unit =
     for (filename <- args) try {
+      if (filename == "--strict") {
+        useStrictMode = true
+      } else {
+
       Console.err.println("Checking \"" + filename + "\" ...")
 
       val input =
@@ -34,9 +38,15 @@ class AbstractChecker {
       val res = Script check script
       if (!res)
         System exit 1
+
+      }
     } catch {
       case t : Exception => println("ERROR: " + t.getMessage)
     }
+
+  private var useStrictMode = false
+
+  def strictMode : Boolean = useStrictMode
 
   //////////////////////////////////////////////////////////////////////////////
 
@@ -121,21 +131,39 @@ class AbstractChecker {
     }
   }
 
+  object EmptySMTLIBElementSeq extends SMTLIBElementSeq {
+    def checkList(t : List[AnyRef]) : Either[List[AnyRef], Int] = Left(t)
+  }
+
   //////////////////////////////////////////////////////////////////////////////
 
-  object Script extends SMTLIBElement {
-    val commands = SetInfo.asSeq.* ++
-                   SetLogic.asSeq ++
-                   SetInfo.asSeq.* ++
-                   FunDecl.asSeq.* ++
-                   CHCAssert.asSeq.* ++
-                   CHCQuery.asSeq ++
-                   CheckSat.asSeq ++
-                   Exit.asSeq.?
+  def commandSequence = {
+    setInfoSeq ++
+    SetLogic.asSeq ++
+    setInfoSeq ++
+    FunDecl.asSeq.* ++
+    (CHCAssertClause | CHCAssertFact).asSeq.* ++
+    CHCQuery.asSeq ++
+    CheckSat.asSeq ++
+    exitSeq
+  }
 
+  def setInfoSeq =
+    if (strictMode)
+      EmptySMTLIBElementSeq
+    else
+      SetInfo.asSeq.*
+
+  def exitSeq =
+    if (strictMode)
+      EmptySMTLIBElementSeq
+    else
+      Exit.asSeq.?
+
+  object Script extends SMTLIBElement {
     def check(t : AnyRef) : Boolean = t match {
       case t : Script =>
-        commands.checkList(t.listcommand_.asScala.toList) match {
+        commandSequence.checkList(t.listcommand_.asScala.toList) match {
           case Left(List()) => {
             println("passed")
             true
@@ -234,7 +262,8 @@ class AbstractChecker {
     }
   }
 
-  case class CHCClause(headCheck : SMTLIBElement) extends SMTLIBElement {
+  case class CHCClause(tailCheck: SMTLIBElement,
+                       headCheck : SMTLIBElement) extends SMTLIBElement {
     def check(t : AnyRef) : Boolean = t match {
       case c : AssertCommand =>
         c.term_ match {
@@ -250,20 +279,24 @@ class AbstractChecker {
     }
   }
 
-  val CHCAssertClause = CHCClause(CHCHead)
-
   object CHCAssertFact extends SMTLIBElement {
     def check(t : AnyRef) : Boolean = t match {
       case c : AssertCommand =>
-        CHCHead check c.term_ // TODO: does not seem to make much sense
+        if (strictMode)
+          CHCHead check c.term_ // TODO: does not seem to make much sense
+        else
+          c.term_ match {
+            case f : QuantifierTerm =>
+              (printer print f.quantifier_) == "forall" &&
+              VarDecl.asSeq.+.checkJavaList(f.listsortedvariablec_) &&
+              (CHCHead check f.term_)
+            case _ =>
+              false
+          }
       case _ =>
         false
     }
   }
-
-  val CHCAssert = CHCAssertClause | CHCAssertFact
-
-  val CHCQuery = CHCClause(FalseFormula)
 
   object VarDecl extends SMTLIBElement {
     def check(t : AnyRef) : Boolean = t match {
@@ -315,10 +348,33 @@ class AbstractChecker {
     }
   }
 
+  //////////////////////////////////////////////////////////////////////////////
+
   val CHCTail = PredAtom |
                 InterpretedFormula |
                 FunExpression("and",
                               PredAtom.asSeq.* ++ InterpretedFormula.asSeq.*)
+
+  val CHCAssertClause = CHCClause(CHCTail, CHCHead)
+
+  val CHCLinTail = PredAtom |
+                   InterpretedFormula |
+                   FunExpression("and",
+                                 PredAtom.asSeq ++ InterpretedFormula.asSeq.*)
+
+  val CHCLinAssertClause = CHCClause(CHCLinTail, CHCHead)
+
+  val CHCAssertQuantifiedFact = CHCClause(InterpretedFormula, CHCHead)
+
+  def CHCQuery = CHCClause(CHCTail, queryHead)
+
+  def CHCLinQuery = CHCClause(CHCLinTail, queryHead)
+
+  def queryHead =
+    if (strictMode)
+      FalseFormula
+    else
+      InterpretedFormula
 
   //////////////////////////////////////////////////////////////////////////////
 
@@ -366,10 +422,50 @@ object LIAChecker extends AbstractLIAChecker
 
 object LIALinChecker extends AbstractLIAChecker {
 
-  override val CHCTail =
-    PredAtom |
-    InterpretedFormula |
-    FunExpression("and",
-                  PredAtom.asSeq.? ++ InterpretedFormula.asSeq.*)
+  override def commandSequence = {
+    setInfoSeq ++
+    SetLogic.asSeq ++
+    setInfoSeq ++
+    FunDecl.asSeq.* ++
+    (CHCLinAssertClause | CHCAssertFact).asSeq.* ++
+    CHCLinQuery.asSeq ++
+    CheckSat.asSeq ++
+    exitSeq
+  }
+
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+class AbstractLRAChecker extends AbstractChecker {
+
+  val possibleSorts = Set("Real", "Bool")
+
+  override val AcceptedSort : SMTLIBElement = new SMTLIBElement {
+    def check(t : AnyRef) : Boolean = t match {
+      case s : Sort =>
+        possibleSorts contains (printer print s)
+      case _ =>
+        false
+    }
+  }
+
+}
+
+object LRAChecker extends AbstractLRAChecker
+
+object LRATSChecker extends AbstractLRAChecker {
+
+  override def commandSequence = {
+    setInfoSeq ++
+    SetLogic.asSeq ++
+    setInfoSeq ++
+    FunDecl.asSeq ++
+    (CHCAssertQuantifiedFact | CHCAssertFact).asSeq ++
+    CHCLinAssertClause.asSeq ++
+    CHCLinQuery.asSeq ++
+    CheckSat.asSeq ++
+    exitSeq
+  }
 
 }

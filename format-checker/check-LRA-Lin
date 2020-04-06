@@ -1,0 +1,5 @@
+#!/bin/sh
+
+BASEDIR=`dirname $(readlink -e $0)`
+
+exec java -cp $BASEDIR/target/scala-2.11/chc-format-checker-assembly-0.1.jar formatchecker.LRALinChecker "$@"

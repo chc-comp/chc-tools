@@ -1,0 +1,35 @@
+benchmark   ::=
+   set_info*                                            (1)
+   logic
+   set_info*
+   fun_decl+
+   (assert chc_assert)*
+   (assert chc_query)
+   (check-sat)
+   (exit)                                               (2)
+
+logic       ::= (set-logic HORN)
+fun_decl    ::= (declare-fun symbol ( sort* ) Bool)
+
+chc_assert  ::=   ;; a well-formed first-order sentence of the form
+  | (forall ( var_decl+ ) (=> chc_tail chc_head))
+  | (forall ( var_decl+ ) chc_head)                     (3)
+  | chc_head
+
+var_decl    ::= (symbol sort)
+
+chc_head    ::=
+  | (u_predicate var*) , where all variables are DISTINCT
+
+chc_tail    ::=
+  | (u_predicate var*)
+  | i_formula
+  | (and (u_predicate var*)+ i_formula*)
+
+chc_query   ::=  ;; a well-formed first-order sentence of the form
+  | (forall ( var_decl+ ) (=> chc_tail i_formula)       (4)
+
+u_predicate ::= uninterperted predicate (i.e., Boolean function)
+
+i_formula   ::=
+   an SMT-LIB formula over variables, and interpreted functions and predicates
