@@ -33,12 +33,13 @@ class RegressionTests extends FlatSpec {
     it should ((if (LRATS) "be" else "not be") + " LRA-TS") in {
       assert(LRATSChecker(Array(PREFIX + filename)) == LRATS)
     }
-    it should ((if (LIALin || LIALinArrays) "be" else "not be") + " LRA-Lin-Arrays") in {
+    it should ((if (LIALin || LIALinArrays) "be" else "not be") + " LIA-Lin-Arrays") in {
       assert(LIALinArraysChecker(Array(PREFIX + filename)) == (LIALin || LIALinArrays))
     }
   }
 
   testFile("LIA-lin.smt2", LIA = true, LIALin = true)
+  testFile("LIA-nonlin.smt2", LIA = true)
   testFile("LIA-lin-mixed-types.smt2")
   testFile("reve.smt2", general = false)
 

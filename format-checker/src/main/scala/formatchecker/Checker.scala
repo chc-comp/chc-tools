@@ -278,7 +278,7 @@ class AbstractChecker {
           case f : QuantifierTerm =>
             (printer print f.quantifier_) == "forall" &&
             VarDecl.asSeq.+.checkJavaList(f.listsortedvariablec_) &&
-            FunExpression("=>", CHCTail.asSeq ++ headCheck.asSeq).check(f.term_)
+            FunExpression("=>", tailCheck.asSeq ++ headCheck.asSeq).check(f.term_)
           case _ =>
             false
         }
@@ -443,7 +443,7 @@ class AbstractLIAChecker extends AbstractChecker {
 
 object LIAChecker extends AbstractLIAChecker
 
-object LIALinChecker extends AbstractLIAChecker {
+abstract class AbstractLIALinChecker extends AbstractLIAChecker {
 
   override def commandSequence = {
     setInfoSeq ++
@@ -458,7 +458,9 @@ object LIALinChecker extends AbstractLIAChecker {
 
 }
 
-object LIALinArraysChecker extends AbstractLIAChecker {
+object LIALinChecker extends AbstractLIALinChecker
+
+object LIALinArraysChecker extends AbstractLIALinChecker {
 
   override val possibleSorts = Set("Int", "Bool", "(Array Int Int)")
 
@@ -482,6 +484,21 @@ class AbstractLRAChecker extends AbstractChecker {
 }
 
 object LRAChecker extends AbstractLRAChecker
+
+object LRALinChecker extends AbstractLIAChecker {
+
+  override def commandSequence = {
+    setInfoSeq ++
+    SetLogic.asSeq ++
+    setInfoSeq ++
+    FunDecl.asSeq.* ++
+    (CHCLinAssertClause | CHCAssertFact).asSeq.* ++
+    CHCLinQuery.asSeq ++
+    CheckSat.asSeq ++
+    exitSeq
+  }
+
+}
 
 object LRATSChecker extends AbstractLRAChecker {
 
