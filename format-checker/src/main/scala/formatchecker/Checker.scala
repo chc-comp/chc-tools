@@ -388,15 +388,9 @@ class AbstractChecker {
 
   val CHCAssertQuantifiedFact = CHCClause(InterpretedFormula, CHCHead)
 
-  def CHCQuery = CHCClause(CHCTail, queryHead)
+  def CHCQuery = CHCClause(CHCTail, FalseFormula)
 
-  def CHCLinQuery = CHCClause(CHCLinTail, queryHead)
-
-  def queryHead =
-    if (strictMode)
-      FalseFormula
-    else
-      InterpretedFormula
+  def CHCLinQuery = CHCClause(CHCLinTail, FalseFormula)
 
   //////////////////////////////////////////////////////////////////////////////
 
