@@ -290,6 +290,8 @@ class AbstractChecker {
               (printer print f.quantifier_) == "forall" &&
               VarDecl.asSeq.+.checkJavaList(f.listsortedvariablec_) &&
               (CHCHead check f.term_)
+            case f : NullaryTerm =>
+              true
             case _ =>
               false
           }
@@ -314,6 +316,10 @@ class AbstractChecker {
         // distinct argument variables
         (for (t <- c.listterm_.asScala.iterator)
          yield (printer print t)).toSet.size == c.listterm_.size
+      case c : NullaryTerm
+          if !strictMode &&
+             !(interpretedFunctions contains (printer print c)) =>
+        true
       case _ =>
         false
     }
@@ -323,11 +329,17 @@ class AbstractChecker {
     def check(t : AnyRef) : Boolean = t match {
       case c : FunctionTerm =>
         VarExpression.asSeq.*.checkJavaList(c.listterm_)
+      case c : NullaryTerm
+          if !strictMode &&
+             !(interpretedFunctions contains (printer print c)) =>
+        true
       case _ =>
         false
     }
   }
 
+  // TODO: check that is currently missing: no uninterpreted nullary
+  // predicates occur in the formula 
   object InterpretedFormula extends SMTLIBElement {
     def check(t : AnyRef) : Boolean = t match {
       case t : FunctionTerm =>
@@ -379,7 +391,7 @@ class AbstractChecker {
   //////////////////////////////////////////////////////////////////////////////
 
   val interpretedFunctions =
-    Set("not", "and", "or", "=>",
+    Set("not", "and", "or", "=>", "true", "false",
         "ite",
         "=", "<", ">", "<=", ">=",
         "+", "-", "*", "mod", "div")

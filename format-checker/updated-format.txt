@@ -6,7 +6,7 @@ benchmark   ::=
    (assert chc_assert)*
    (assert chc_query)
    (check-sat)
-   (exit)                                               (2)
+   (exit)?                                              (2)
 
 logic       ::= (set-logic HORN)
 fun_decl    ::= (declare-fun symbol ( sort* ) Bool)
@@ -14,22 +14,35 @@ fun_decl    ::= (declare-fun symbol ( sort* ) Bool)
 chc_assert  ::=   ;; a well-formed first-order sentence of the form
   | (forall ( var_decl+ ) (=> chc_tail chc_head))
   | (forall ( var_decl+ ) chc_head)                     (3)
-  | chc_head
+  | u_predicate
 
-var_decl    ::= (symbol sort)
+var_decl    ::=
+  | (symbol sort)
 
 chc_head    ::=
-  | (u_predicate var*) , where all variables are DISTINCT
+  | u_pred_atom, where all argument variables in the atom are DISTINCT
 
 chc_tail    ::=
-  | (u_predicate var*)
+  | u_pred_atom
   | i_formula
-  | (and (u_predicate var*)+ i_formula*)
+  | (and u_pred_atom+ i_formula*)
+
+u_pred_atom   ::=                                       (4)
+  | u_predicate          ;; nullary predicate
+  | (u_predicate var*)   ;; predicate with arguments
 
 chc_query   ::=  ;; a well-formed first-order sentence of the form
-  | (forall ( var_decl+ ) (=> chc_tail i_formula)       (4)
+  | (forall ( var_decl+ ) (=> chc_tail false))
 
-u_predicate ::= uninterperted predicate (i.e., Boolean function)
+u_predicate ::=
+  | uninterpreted predicate (i.e., Boolean function)
 
 i_formula   ::=
-   an SMT-LIB formula over variables, and interpreted functions and predicates
+  | an SMT-LIB formula over variables, and interpreted functions and predicates
+
+
+(1) set-info to specify, e.g., SMT-LIB format version or origin of benchmarks
+(2) de facto all benchmarks already end with an (exit)
+(3) quantified facts, and cleaned up the case of facts without
+    arguments or quantifiers
+(4) explicitly allow nullary predicates as well
