@@ -352,6 +352,8 @@ class AbstractChecker {
     def check(t : AnyRef) : Boolean = t match {
       case t : FunctionTerm =>
         InterpretedFormulaVisitor.visit(t, ())
+      case t : NullaryTerm =>
+        interpretedFunctions contains (printer print t)
       case t : LetTerm =>
         InterpretedFormulaVisitor.visit(t, ())
       case _ =>
@@ -402,7 +404,8 @@ class AbstractChecker {
     Set("not", "and", "or", "=>", "true", "false",
         "ite",
         "=", "<", ">", "<=", ">=",
-        "+", "-", "*", "mod", "div")
+        "+", "-", "*", "mod", "div",
+        "select", "store")
 
   object InterpretedFormulaVisitor extends FoldVisitor[Boolean, Unit] {
     def leaf(arg : Unit) = true
@@ -452,6 +455,12 @@ object LIALinChecker extends AbstractLIAChecker {
     CheckSat.asSeq ++
     exitSeq
   }
+
+}
+
+object LIALinArraysChecker extends AbstractLIAChecker {
+
+  override val possibleSorts = Set("Int", "Bool", "(Array Int Int)")
 
 }
 
