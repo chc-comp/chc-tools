@@ -17,3 +17,5 @@ libraryDependencies +=
 
 libraryDependencies +=
   "net.sf.squirrel-sql.thirdparty-non-maven" % "java-cup" % "0.11a"
+
+libraryDependencies += "org.scalatest" %% "scalatest" % "3.1.1" % "test"

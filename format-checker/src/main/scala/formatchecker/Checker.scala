@@ -14,35 +14,43 @@ class AbstractChecker {
 
   val printer = new PrettyPrinterNonStatic
 
-  def main(args: Array[String]) : Unit =
+  def apply(args: Array[String]) : Boolean = {
+    var result = true
+
     for (filename <- args) try {
       if (filename == "--strict") {
         useStrictMode = true
       } else {
 
-      Console.err.println("Checking \"" + filename + "\" ...")
+        Console.err.println("Checking \"" + filename + "\" ...")
 
-      val input =
-        new java.io.BufferedReader (
-          new java.io.FileReader(new java.io.File (filename)))
-      val l = new Yylex(input)
-      val p = new parser(l) {
-        override def report_error(message : String, info : Object) : Unit = {
-          Console.err.println(message)
+        val input =
+          new java.io.BufferedReader (
+            new java.io.FileReader(new java.io.File (filename)))
+        val l = new Yylex(input)
+        val p = new parser(l) {
+          override def report_error(message : String, info : Object) : Unit = {
+            Console.err.println(message)
+          }
         }
-      }
 
-      val script = p.pScriptC
+        val script = p.pScriptC
 
 //      println(printer print script)
-      val res = Script check script
-      if (!res)
-        System exit 1
-
+        result = Script check script
       }
     } catch {
-      case t : Exception => println("ERROR: " + t.getMessage)
+      case t : Exception => {
+        println("ERROR: " + t.getMessage)
+        result = false
+      }
     }
+
+    result
+  }
+
+  def main(args: Array[String]) : Unit =
+    System exit (if (apply(args)) 0 else 1)
 
   private var useStrictMode = false
 
