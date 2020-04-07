@@ -38,4 +38,12 @@ class RegressionTests extends FlatSpec {
   testFile("LIA-lin.smt2", LIA = true, LIALin = true)
   testFile("LIA-lin-mixed-types.smt2")
   testFile("reve.smt2", general = false)
+
+  testFile("from-z3-script/cst_in_head.smt2", general = false)
+  testFile("from-z3-script/distinct_vars.smt2", general = false)
+  testFile("from-z3-script/multi_query.smt2", general = false)
+  testFile("from-z3-script/query_not_last.smt2", general = false)
+  testFile("from-z3-script/tail_is_not_conj.smt2", LIA = true, LIALin = true)
+  testFile("from-z3-script/uf_in_iformula_1.smt2", general = false)
+  testFile("from-z3-script/uf_in_iformula_2.smt2", general = false)
 }
