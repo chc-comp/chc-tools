@@ -318,24 +318,22 @@ class AbstractChecker {
   }
 
   object CHCHead extends SMTLIBElement {
-    def check(t : AnyRef) : Boolean = t match {
-      case c : FunctionTerm =>
-        PredAtom.check(t) &&
-        // distinct argument variables
-        (for (t <- c.listterm_.asScala.iterator)
-         yield (printer print t)).toSet.size == c.listterm_.size
-      case c : NullaryTerm
-          if !strictMode &&
-             !(interpretedFunctions contains (printer print c)) =>
-        true
-      case _ =>
-        false
-    }
+    def check(t : AnyRef) : Boolean =
+      (PredAtom check t) &&
+      (t match {
+       case c : FunctionTerm =>
+         // distinct argument variables
+         (for (t <- c.listterm_.asScala.iterator)
+          yield (printer print t)).toSet.size == c.listterm_.size
+       case _ =>
+         true
+     })
   }
 
   object PredAtom extends SMTLIBElement {
     def check(t : AnyRef) : Boolean = t match {
       case c : FunctionTerm =>
+        !(interpretedFunctions contains (printer print c.symbolref_)) &&
         VarExpression.asSeq.*.checkJavaList(c.listterm_)
       case c : NullaryTerm
           if !strictMode &&
@@ -388,9 +386,9 @@ class AbstractChecker {
 
   val CHCAssertQuantifiedFact = CHCClause(InterpretedFormula, CHCHead)
 
-  def CHCQuery = CHCClause(CHCTail, FalseFormula)
+  val CHCQuery = CHCClause(CHCTail, FalseFormula)
 
-  def CHCLinQuery = CHCClause(CHCLinTail, FalseFormula)
+  val CHCLinQuery = CHCClause(CHCLinTail, FalseFormula)
 
   //////////////////////////////////////////////////////////////////////////////
 
