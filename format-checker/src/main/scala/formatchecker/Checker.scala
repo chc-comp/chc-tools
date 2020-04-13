@@ -403,11 +403,15 @@ class AbstractChecker {
     def leaf(arg : Unit) = true
     def combine(x : Boolean, y : Boolean, arg : Unit) = x && y
     override def visit(p : FunctionTerm, arg : Unit) = {
-      if (!(interpretedFunctions contains (printer print p.symbolref_))) {
-//        println("did not recognise as interpreted: " + (printer print p))
-        false
-      } else {
-        super.visit(p, arg)
+      p.symbolref_ match {
+        case r : CastIdentifierRef if (printer print r.identifier_) == "const" =>
+          super.visit(p, arg)
+        case r if (interpretedFunctions contains (printer print r)) =>
+          super.visit(p, arg)
+        case _ => {
+//          println("did not recognise as interpreted: " + (printer print p))
+          false
+        }
       }
     }
   }
@@ -453,6 +457,12 @@ abstract class AbstractLIALinChecker extends AbstractLIAChecker {
 object LIALinChecker extends AbstractLIALinChecker
 
 object LIALinArraysChecker extends AbstractLIALinChecker {
+
+  override val possibleSorts = Set("Int", "Bool", "(Array Int Int)")
+
+}
+
+object LIAArraysChecker extends AbstractLIAChecker {
 
   override val possibleSorts = Set("Int", "Bool", "(Array Int Int)")
 
