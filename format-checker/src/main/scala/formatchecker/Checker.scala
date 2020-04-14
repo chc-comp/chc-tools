@@ -396,7 +396,7 @@ class AbstractChecker {
     Set("not", "and", "or", "=>", "true", "false",
         "ite",
         "=", "<", ">", "<=", ">=",
-        "+", "-", "*", "mod", "div", "/",
+        "+", "-", "*", "mod", "div", "abs", "/", "to_real", "to_int",
         "select", "store")
 
   object InterpretedFormulaVisitor extends FoldVisitor[Boolean, Unit] {
@@ -409,7 +409,7 @@ class AbstractChecker {
         case r if (interpretedFunctions contains (printer print r)) =>
           super.visit(p, arg)
         case _ => {
-//          println("did not recognise as interpreted: " + (printer print p))
+          println("did not recognise as interpreted: " + (printer print p))
           false
         }
       }
