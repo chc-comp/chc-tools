@@ -395,7 +395,7 @@ class AbstractChecker {
   val interpretedFunctions =
     Set("not", "and", "or", "=>", "true", "false",
         "ite",
-        "=", "<", ">", "<=", ">=",
+        "=", "distinct", "<", ">", "<=", ">=",
         "+", "-", "*", "mod", "div", "abs", "/", "to_real", "to_int",
         "select", "store")
 
