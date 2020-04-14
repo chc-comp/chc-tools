@@ -396,7 +396,7 @@ class AbstractChecker {
     Set("not", "and", "or", "=>", "true", "false",
         "ite",
         "=", "<", ">", "<=", ">=",
-        "+", "-", "*", "mod", "div",
+        "+", "-", "*", "mod", "div", "/",
         "select", "store")
 
   object InterpretedFormulaVisitor extends FoldVisitor[Boolean, Unit] {
