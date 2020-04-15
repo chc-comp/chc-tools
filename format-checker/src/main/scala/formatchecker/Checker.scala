@@ -404,8 +404,8 @@ class AbstractChecker {
     def combine(x : Boolean, y : Boolean, arg : Unit) = x && y
     override def visit(p : FunctionTerm, arg : Unit) = {
       p.symbolref_ match {
-        case r : CastIdentifierRef if (printer print r.identifier_) == "const" =>
-          super.visit(p, arg)
+//        case r : CastIdentifierRef if (printer print r.identifier_) == "const" =>
+//          super.visit(p, arg)
         case r if (interpretedFunctions contains (printer print r)) =>
           super.visit(p, arg)
         case _ => {
