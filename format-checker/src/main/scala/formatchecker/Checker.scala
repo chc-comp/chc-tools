@@ -426,10 +426,13 @@ class AbstractLIAChecker extends AbstractChecker {
 
   val possibleSorts = Set("Int", "Bool")
 
+  def isPossibleSort(s : Sort) =
+    possibleSorts contains (printer print s)
+
   override val AcceptedSort : SMTLIBElement = new SMTLIBElement {
     def check(t : AnyRef) : Boolean = t match {
       case s : Sort =>
-        possibleSorts contains (printer print s)
+        isPossibleSort(s)
       case _ =>
         false
     }
@@ -458,7 +461,14 @@ object LIALinChecker extends AbstractLIALinChecker
 
 object LIALinArraysChecker extends AbstractLIALinChecker {
 
-  override val possibleSorts = Set("Int", "Bool", "(Array Int Int)")
+  override def isPossibleSort(s : Sort) = s match {
+    case s : CompositeSort
+        if (printer print s.identifier_) == "Array" &&
+           s.listsort_.size == 2 =>
+      s.listsort_.asScala forall isPossibleSort
+    case s =>
+      possibleSorts contains (printer print s)
+  }
 
 }
 
