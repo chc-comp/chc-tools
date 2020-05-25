@@ -25,8 +25,7 @@ def pp_chc_as_smt(db, out):
     fp.set('print_fixedpoint_extensions', False)
     out.write(fp.sexpr())
     for q in db.get_queries():
-        assert(q.has_formula())
-        fml = q.get_formula()
+        fml = q.mk_formula()
         out.write('(assert {})\n'.format(fml.sexpr()))
     out.write('(check-sat)\n')
 
