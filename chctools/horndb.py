@@ -394,7 +394,7 @@ class FolModel(object):
     def __str__(self):
         return str(self._fn_interps)
     def __repr__(self):
-        return reper(self._fn_interps)
+        return repr(self._fn_interps)
 
 def load_horn_db_from_file(fname):
     fp = z3.Fixedpoint()
