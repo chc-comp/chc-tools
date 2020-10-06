@@ -4,6 +4,8 @@ from typing import MutableMapping, Optional, Callable, Any, List, TextIO, Union,
 # noinspection PyPackageRequirements
 import z3  # type: ignore
 
+from .horndb import HornClauseDb, HornRule
+
 
 def z3_minus(z3_expr: z3.ExprRef) -> z3.ExprRef:
     if isinstance(z3_expr, z3.BoolRef):
@@ -169,7 +171,7 @@ class Minus(Bitvec):
     bitvec: Bitvec
 
     def __init__(self, bitvec: Bitvec):
-        super().__init__(bitvec.nid, bitvec.sort)
+        super().__init__(-bitvec.nid, bitvec.sort)
         self.bitvec = bitvec
 
     def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
@@ -839,7 +841,8 @@ class Ts:
     inputs: List[z3.ExprRef]
     init: z3.ExprRef
     tr: z3.ExprRef
-    bad: z3.ExprRef
+    bads: List[z3.ExprRef]
+    constraints: List[z3.ExprRef]
 
     def __init__(self):
         self.pre_vars = []
@@ -847,7 +850,8 @@ class Ts:
         self.inputs = []
         self.init = z3.BoolVal(True)
         self.tr = z3.BoolVal(True)
-        self.bad = z3.BoolVal(False)
+        self.bads = []
+        self.constraints = []
 
     def put_var(self, sort: z3.SortRef, prefix: str = "") -> Tuple[z3.ExprRef, z3.ExprRef]:
         pre_z3_expr: z3.ExprRef = z3.FreshConst(sort, "v" + prefix)
@@ -870,26 +874,95 @@ class Ts:
     def vars(self) -> List[z3.ExprRef]:
         return self.pre_vars + self.post_vars
 
-    def all(self) -> List[z3.ExprRef]:
+    def vars_and_inputs(self) -> List[z3.ExprRef]:
         return self.vars() + self.inputs
 
-    def to_chc(self) -> List[str]:
-        all_vars: List[z3.ExprRef] = self.vars()
-        inv: z3.FuncDeclRef = self.inv()
-        inv_pre = inv(*self.pre_vars)
-        return ["(set-logic HORN)\n",
-                "(set-option :fp.engine spacer)\n",
-                self.inv().sexpr(),
-                "(assert {:s})\n".format(
-                    (z3.ForAll(all_vars, z3.Implies(self.init, inv_pre))).sexpr()),
-                "(assert {:s})\n".format(
-                    (z3.ForAll(all_vars, z3.Implies(z3.And(inv_pre, self.tr),
-                                                    inv(*self.post_vars))).sexpr())),
-                "(assert {:s})\n".format(
-                    (z3.ForAll(all_vars, z3.Implies(z3.And(inv_pre, self.bad), False))).sexpr()),
-                "(check-sat)\n",
-                "(get-model)\n",
-                "(exit)\n"]
+    def bad(self) -> z3.ExprRef:
+        self.reduce_bads()
+        return self.bads[0]
+
+    def reduce_bads(self) -> None:
+        if len(self.bads) > 1:
+            self.bads = [z3.Or(self.bads)]
+
+    def reduce_constraints(self, method: int = 0) -> None:
+        if self.constraints:
+            # (init(v), tr(v, in, v'), bad(v)) with constraint c(v) is equiv to
+            # init(v) and c(v), tr(v, in, v') and c(v), bad(v) and c(v)
+            # (init(v), tr(v, in, v'), bad(v)) with constraint c(v, in) is equiv to
+            # init(v), tr(v, in, v') and c(v, in), bad(v)
+            if method == 0:
+                self.init = z3.And(self.init, *self.constraints)
+                self.tr = z3.And(self.tr, *self.constraints)
+                self.bads = [z3.And(self.bad(), *self.constraints)]
+            elif method == 1:
+                self.tr = z3.And(self.tr, *self.constraints)
+            else:
+                raise NotImplementedError
+            self.constraints = []
+
+
+def generate_vc(ts: Ts) -> Tuple[z3.ExprRef, z3.ExprRef, z3.ExprRef, z3.FuncDeclRef]:
+    if len(ts.bads) > 1 or ts.constraints:
+        raise NotImplementedError
+    inputs_and_vars: List[z3.ExprRef] = ts.vars_and_inputs()
+    inv: z3.FuncDeclRef = ts.inv()
+    inv_pre: z3.ExprRef = inv(*ts.pre_vars)
+    inv_post: z3.ExprRef = inv(*ts.post_vars)
+    return (z3.ForAll(inputs_and_vars, z3.Implies(ts.init, inv_pre)),
+            z3.ForAll(inputs_and_vars, z3.Implies(z3.And(inv_pre, ts.tr), inv_post)),
+            z3.ForAll(inputs_and_vars, z3.Implies(z3.And(inv_pre, ts.bad()), False)),
+            inv)
+
+
+def generate_chc_str(init: z3.ExprRef, tr: z3.ExprRef, bad: z3.ExprRef,
+                     inv: z3.FuncDeclRef) -> List[str]:
+    return ["(set-logic HORN)\n",
+            "(set-option :fp.engine spacer)\n",
+            "{:s}\n".format(inv.sexpr()),
+            "(assert {:s})\n".format(init.sexpr()),
+            "(assert {:s})\n".format(tr.sexpr()),
+            "(assert {:s})\n".format(bad.sexpr()),
+            "(check-sat)\n",
+            "(get-model)\n",
+            "(exit)\n"]
+
+
+def generate_horn_clause_db(init: z3.ExprRef, tr: z3.ExprRef, bad: z3.ExprRef) -> HornClauseDb:
+    db: HornClauseDb = HornClauseDb()
+    db.add_rule(HornRule(init))
+    db.add_rule(HornRule(tr))
+    db.add_rule(HornRule(bad))
+    db.seal()
+    return db
+
+
+def bmc(init: z3.ExprRef, tr: z3.ExprRef, bad: z3.ExprRef, n: int, pre_vars: List[z3.ExprRef],
+        post_vars: List[z3.ExprRef], inputs: List[z3.ExprRef]):
+    z3_exprs: List[z3.ExprRef] = [init, tr]
+
+    vars1: List[z3.ExprRef] = pre_vars.copy()
+    vars2: List[z3.ExprRef] = post_vars.copy()
+    ips: List[z3.ExprRef] = inputs.copy()
+
+    for i in range(n - 1):
+        for j in range(len(vars1)):
+            var: z3.ExprRef = z3.FreshConst(vars2[j].sort(), vars2[j].sexpr().split('!')[0])
+            tr = z3.substitute(tr, (vars2[j], var))
+            tr = z3.substitute(tr, (vars1[j], vars2[j]))
+            vars1[j] = vars2[j]
+            vars2[j] = var
+        for k in range(len(ips)):
+            new_input: z3.ExprRef = z3.FreshConst(ips[k].sort(), ips[k].sexpr().split('!')[0])
+            tr = z3.substitute(tr, (ips[k], new_input))
+            ips[k] = new_input
+        z3_exprs.append(tr)
+
+    for v1, v2 in zip(pre_vars, vars2):
+        bad = z3.substitute(bad, (v1, v2))
+
+    z3_exprs.append(bad)
+    return z3.And(z3_exprs)
 
 
 class Btor2Parser:
@@ -935,6 +1008,8 @@ class Btor2Parser:
 
     def get_expr(self, n: Union[int, str]) -> Expr:
         nid: int = int(n)
+        if nid < 0:
+            return Minus(self.bitvec_table[-nid])
         return self.bitvec_table[nid] if nid in self.bitvec_table else self.array_table[nid]
 
     def get_bitvec_state(self, n: Union[int, str]) -> BitvecState:
@@ -944,7 +1019,10 @@ class Btor2Parser:
         return self.array_state_table[int(n)]
 
     def get_bitvec(self, n: Union[int, str]) -> Bitvec:
-        return self.bitvec_table[int(n)]
+        nid: int = int(n)
+        if nid < 0:
+            return Minus(self.bitvec_table[-nid])
+        return self.bitvec_table[nid]
 
     def get_array(self, n: Union[int, str]) -> Array:
         return self.array_table[int(n)]
@@ -1249,13 +1327,9 @@ class Btor2Parser:
 
         ts.init = z3.And(z3_inits)
         ts.tr = z3.And(z3_nexts)
-        ts.bad = z3.Or(z3.And([bad.bitvec.to_z3_bool(m) for bad in self.bad_list]),
-                       z3.Or([constraint.bitvec.to_z3_bool(m) for constraint in
-                              self.constraint_list]))
+        ts.bads = [bad.bitvec.to_z3_bool(m) for bad in self.bad_list]
+        ts.constraints = [constraint.bitvec.to_z3_bool(m) for constraint in self.constraint_list]
         return ts
-
-    def to_chc(self) -> List[str]:
-        return self.to_ts().to_chc()
 
 
 def main():
@@ -1268,10 +1342,13 @@ def main():
     args: argparse.Namespace = parser.parse_args()
 
     with open(args.input) as input_file:
-        with open(args.output, 'w') as output_file:
+        with open(args.output, 'w+') as output_file:
             btor2_parser: Btor2Parser = Btor2Parser()
             btor2_parser.parse(input_file)
-            output_file.writelines(btor2_parser.to_chc())
+            ts: Ts = btor2_parser.to_ts()
+            ts.reduce_constraints()
+            ts.reduce_bads()
+            output_file.writelines(generate_chc_str(*generate_vc(ts)))
 
 
 if __name__ == '__main__':

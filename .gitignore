@@ -2,3 +2,4 @@ ddSMT
 venv
 spacer_1.1
 .idea
+__pycache__
