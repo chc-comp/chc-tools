@@ -1,10 +1,10 @@
 import sys
-import z3
+import z3  # type: ignore
 import io
 
-import pysmt.environment
-import pysmt.solvers.z3 as pyz3
-from pysmt.smtlib.parser import SmtLibZ3Parser, Tokenizer
+import pysmt.environment  # type: ignore
+import pysmt.solvers.z3 as pyz3  # type: ignore
+from pysmt.smtlib.parser import SmtLibZ3Parser, Tokenizer  # type: ignore
 
 def ground_quantifier(qexpr):
     body = qexpr.body()

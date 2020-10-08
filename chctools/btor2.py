@@ -4,7 +4,7 @@ from typing import MutableMapping, Optional, Callable, Any, List, TextIO, Union,
 # noinspection PyPackageRequirements
 import z3  # type: ignore
 
-from .horndb import HornClauseDb, HornRule
+from .horndb import HornClauseDb, HornRule  # type: ignore
 
 
 def z3_minus(z3_expr: z3.ExprRef) -> z3.ExprRef:
@@ -255,7 +255,7 @@ class BitvecState(Bitvec):
 
 # noinspection DuplicatedCode
 class ArrayState(Array):
-    init: Optional[Array]
+    init: Optional[Expr]
     next: Optional[Array]
 
     def __init__(self, nid: int, sort: ArraySort, symbol: str = ""):
@@ -357,9 +357,12 @@ class Redor(BitvecUnaryOp):
 
 
 class Redxor(BitvecUnaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        # TODO
-        raise ValueError
+    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
+        child_z3_bitvec: z3.BitVecRef = self.get_child_z3_bitvec(m)
+        z3_expr: z3.BitVecRef = z3.Extract(0, 0, child_z3_bitvec)
+        for i in range(1, self.width()):
+            z3_expr = z3_expr + z3.Extract(i, i, child_z3_bitvec)
+        return z3_expr
 
 
 class BitvecBinaryOp(Bitvec, ABC):
@@ -684,25 +687,42 @@ class ArrayRead(Array):
         return self.array.to_z3_array(m)[to_z3_non_bool(self.expr.to_z3_expr(m))]
 
 
-class Ite(Bitvec):
-    bitvec1: Bitvec
-    bitvec2: Bitvec
-    bitvec3: Bitvec
+class ArrayIte(Array):
+    bitvec: Bitvec
+    array1: Array
+    array2: Array
 
-    def __init__(self, nid: int, sort: BitvecSort, bitvec1: Bitvec, bitvec2: Bitvec,
-                 bitvec3: Bitvec, symbol: str = ""):
+    def __init__(self, nid: int, sort: ArraySort, bitvec: Bitvec, array1: Array,
+                 array2: Array, symbol: str = ""):
         super().__init__(nid, sort, symbol)
-        self.bitvec1 = bitvec1
-        self.bitvec2 = bitvec2
-        self.bitvec3 = bitvec3
+        self.bitvec = bitvec
+        self.array1 = array1
+        self.array2 = array2
 
     def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
+        return z3.If(self.bitvec.to_z3_bool(m), self.array1.to_z3_expr(m),
+                     self.array2.to_z3_expr(m))
+
+
+class BitvecIte(Bitvec):
+    bitvec: Bitvec
+    bitvec1: Bitvec
+    bitvec2: Bitvec
+
+    def __init__(self, nid: int, sort: BitvecSort, bitvec: Bitvec, bitvec1: Bitvec,
+                 bitvec2: Bitvec, symbol: str = ""):
+        super().__init__(nid, sort, symbol)
+        self.bitvec = bitvec
+        self.bitvec1 = bitvec1
+        self.bitvec2 = bitvec2
+
+    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
+        z3_expr1: z3.ExprRef = self.bitvec1.to_z3_expr(m)
         z3_expr2: z3.ExprRef = self.bitvec2.to_z3_expr(m)
-        z3_expr3: z3.ExprRef = self.bitvec3.to_z3_expr(m)
-        if isinstance(z3_expr2, z3.BoolRef) or isinstance(z3_expr3, z3.BoolRef):
-            return z3.If(self.bitvec1.to_z3_bool(m), to_z3_bool(z3_expr2), to_z3_bool(z3_expr3))
+        if isinstance(z3_expr1, z3.BoolRef) or isinstance(z3_expr2, z3.BoolRef):
+            return z3.If(self.bitvec.to_z3_bool(m), to_z3_bool(z3_expr1), to_z3_bool(z3_expr2))
         else:
-            return z3.If(self.bitvec1.to_z3_bool(m), z3_expr2, z3_expr3)
+            return z3.If(self.bitvec.to_z3_bool(m), z3_expr1, z3_expr2)
 
 
 class Write(Array):
@@ -879,7 +899,10 @@ class Ts:
 
     def bad(self) -> z3.ExprRef:
         self.reduce_bads()
-        return self.bads[0]
+        if self.bads:
+            return self.bads[0]
+        else:
+            return z3.Bool(False)
 
     def reduce_bads(self) -> None:
         if len(self.bads) > 1:
@@ -905,14 +928,20 @@ class Ts:
 def generate_vc(ts: Ts) -> Tuple[z3.ExprRef, z3.ExprRef, z3.ExprRef, z3.FuncDeclRef]:
     if len(ts.bads) > 1 or ts.constraints:
         raise NotImplementedError
-    inputs_and_vars: List[z3.ExprRef] = ts.vars_and_inputs()
+    vars_and_inputs: List[z3.ExprRef] = ts.vars_and_inputs()
     inv: z3.FuncDeclRef = ts.inv()
     inv_pre: z3.ExprRef = inv(*ts.pre_vars)
     inv_post: z3.ExprRef = inv(*ts.post_vars)
-    return (z3.ForAll(inputs_and_vars, z3.Implies(ts.init, inv_pre)),
-            z3.ForAll(inputs_and_vars, z3.Implies(z3.And(inv_pre, ts.tr), inv_post)),
-            z3.ForAll(inputs_and_vars, z3.Implies(z3.And(inv_pre, ts.bad()), False)),
-            inv)
+    if vars_and_inputs:
+        return (z3.ForAll(vars_and_inputs, z3.Implies(ts.init, inv_pre)),
+                z3.ForAll(vars_and_inputs, z3.Implies(z3.And(inv_pre, ts.tr), inv_post)),
+                z3.ForAll(vars_and_inputs, z3.Implies(z3.And(inv_pre, ts.bad()), False)),
+                inv)
+    else:
+        return (z3.Implies(ts.init, inv_pre),
+                z3.Implies(z3.And(inv_pre, ts.tr), inv_post),
+                z3.Implies(z3.And(inv_pre, ts.bad()), False),
+                inv)
 
 
 def generate_chc_str(init: z3.ExprRef, tr: z3.ExprRef, bad: z3.ExprRef,
@@ -946,22 +975,20 @@ def bmc(init: z3.ExprRef, tr: z3.ExprRef, bad: z3.ExprRef, n: int, pre_vars: Lis
     ips: List[z3.ExprRef] = inputs.copy()
 
     for i in range(n - 1):
-        for j in range(len(vars1)):
-            var: z3.ExprRef = z3.FreshConst(vars2[j].sort(), vars2[j].sexpr().split('!')[0])
-            tr = z3.substitute(tr, (vars2[j], var))
-            tr = z3.substitute(tr, (vars1[j], vars2[j]))
-            vars1[j] = vars2[j]
-            vars2[j] = var
-        for k in range(len(ips)):
-            new_input: z3.ExprRef = z3.FreshConst(ips[k].sort(), ips[k].sexpr().split('!')[0])
-            tr = z3.substitute(tr, (ips[k], new_input))
-            ips[k] = new_input
+        new_vars: List[z3.ExprRef] = []
+        new_ips: List[z3.ExprRef] = []
+        var: z3.ExprRef
+
+        for var in vars2:
+            new_vars.append(z3.FreshConst(var.sort(), var.sexpr().split('!')[0]))
+        for var in inputs:
+            new_ips.append(z3.FreshConst(var.sort(), var.sexpr().split('!')[0]))
+
+        tr = z3.substitute(tr, *zip(vars2, new_vars), *zip(vars1, vars2), *zip(ips, new_ips))
+        vars1, vars2, ips = vars2, new_vars, new_ips
         z3_exprs.append(tr)
 
-    for v1, v2 in zip(pre_vars, vars2):
-        bad = z3.substitute(bad, (v1, v2))
-
-    z3_exprs.append(bad)
+    z3_exprs.append(z3.substitute(bad, *zip(pre_vars, vars2)))
     return z3.And(z3_exprs)
 
 
@@ -1103,19 +1130,32 @@ class Btor2Parser:
                 if init_sid in self.bitvec_sort_table:
                     self.get_bitvec_state(tokens[3]).init = self.get_bitvec(tokens[4])
                 elif init_sid in self.array_sort_table:
-                    self.get_array_state(tokens[3]).init_array = self.get_array(tokens[4])
+                    self.get_array_state(tokens[3]).init = self.get_expr(tokens[4])
                 continue
             elif name == 'next':
                 next_sid: int = int(tokens[2])
                 if next_sid in self.bitvec_sort_table:
                     self.get_bitvec_state(tokens[3]).next = self.get_bitvec(tokens[4])
                 elif next_sid in self.array_sort_table:
-                    self.get_array_state(tokens[3]).next_array = self.get_array(tokens[4])
+                    self.get_array_state(tokens[3]).next = self.get_array(tokens[4])
                 continue
             elif name == 'write':
                 self.array_table[nid] = Write(nid, self.get_array_sort(int(tokens[2])),
                                               self.get_array(tokens[3]),
                                               self.get_expr(tokens[4]), self.get_expr(tokens[5]))
+                continue
+            elif name == "ite":
+                ite_sid: int = int(tokens[2])
+                if ite_sid in self.bitvec_sort_table:
+                    self.bitvec_table[nid] = BitvecIte(nid, self.bitvec_sort_table[ite_sid],
+                                                       self.get_bitvec(tokens[3]),
+                                                       self.get_bitvec(tokens[4]),
+                                                       self.get_bitvec(tokens[5]))
+                elif ite_sid in self.array_sort_table:
+                    self.array_table[nid] = ArrayIte(nid, self.array_sort_table[ite_sid],
+                                                     self.get_bitvec(tokens[3]),
+                                                     self.get_array(tokens[4]),
+                                                     self.get_array(tokens[5]))
                 continue
 
             sort: BitvecSort = self.get_bitvec_sort(tokens[2])
@@ -1272,10 +1312,6 @@ class Btor2Parser:
             elif name == 'concat':
                 self.bitvec_table[nid] = Concat(nid, sort, self.get_bitvec(tokens[3]),
                                                 self.get_bitvec(tokens[4]))
-            elif name == 'ite':
-                self.bitvec_table[nid] = Ite(nid, sort, self.get_bitvec(tokens[3]),
-                                             self.get_bitvec(tokens[4]),
-                                             self.get_bitvec(tokens[5]))
 
     def to_ts(self) -> Ts:
         ts: Ts = Ts()
@@ -1320,7 +1356,13 @@ class Btor2Parser:
         # noinspection DuplicatedCode
         for nid, array_state in self.array_state_table.items():
             if array_state.init:
-                z3_inits.append(to_z3_eq(array_state.to_z3_expr(m), array_state.init.to_z3_expr(m)))
+                if array_state.sort.element_sort == array_state.init.sort:
+                    z3_inits.append(to_z3_eq(array_state.to_z3_expr(m),
+                                             z3.K(array_state.sort.index_sort.to_z3_sort(),
+                                                  to_z3_non_bool(array_state.init.to_z3_expr(m)))))
+                else:
+                    z3_inits.append(
+                        to_z3_eq(array_state.to_z3_expr(m), array_state.init.to_z3_expr(m)))
             if array_state.next:
                 z3_nexts.append(to_z3_eq(array_state.to_z3_expr(m_post),
                                          array_state.next.to_z3_expr(m)))
