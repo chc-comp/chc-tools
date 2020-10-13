@@ -4,9 +4,6 @@ from typing import Optional, List, TextIO, Union, Dict, Tuple, Callable, Any
 # noinspection PyPackageRequirements
 import z3  # type: ignore
 
-from .chcpp import pp_chc_as_smt  # type: ignore
-from .horndb import HornClauseDb, HornRule  # type: ignore
-
 
 def to_z3_bitvec(z3_expr: Union[z3.BitVecRef, z3.BoolRef]) -> z3.BitVecRef:
     if isinstance(z3_expr, z3.BitVecRef):
@@ -1496,6 +1493,12 @@ class Btor2Parser:
 
 
 def btor2chc(input_file: TextIO, output_file: TextIO) -> None:
+    import sys
+    from .chcpp import pp_chc_as_smt  # type: ignore
+    from .horndb import HornClauseDb  # type: ignore
+
+    sys.setrecursionlimit(100000)
+
     btor2_parser: Btor2Parser = Btor2Parser()
     btor2_parser.parse(input_file)
     ts: Ts = btor2_parser.to_ts()
