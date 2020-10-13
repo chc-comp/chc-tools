@@ -1,63 +1,59 @@
 from abc import ABC, abstractmethod
-from typing import MutableMapping, Optional, Callable, Any, List, TextIO, Union, Dict, Tuple
+from typing import Optional, List, TextIO, Union, Dict, Tuple, Callable, Any
 
 # noinspection PyPackageRequirements
 import z3  # type: ignore
 
+from .chcpp import pp_chc_as_smt  # type: ignore
 from .horndb import HornClauseDb, HornRule  # type: ignore
 
 
-def z3_minus(z3_expr: z3.ExprRef) -> z3.ExprRef:
-    if isinstance(z3_expr, z3.BoolRef):
-        return z3.Not(z3_expr)
-    elif isinstance(z3_expr, z3.BitVecRef):
-        return ~z3_expr
-    assert False
-
-
-def to_z3_bitvec(z3_expr: z3.ExprRef) -> z3.BitVecRef:
+def to_z3_bitvec(z3_expr: Union[z3.BitVecRef, z3.BoolRef]) -> z3.BitVecRef:
     if isinstance(z3_expr, z3.BitVecRef):
         return z3_expr
-    elif isinstance(z3_expr, z3.BoolRef):
-        return z3.If(z3_expr, z3.BitVecVal(1, 1), z3.BitVecVal(0, 1))
-    assert False
+    elif z3.is_true(z3_expr):
+        return z3.BitVecVal(1, 1)
+    elif z3.is_false(z3_expr):
+        return z3.BitVecVal(0, 1)
+    return z3.If(z3_expr, z3.BitVecVal(1, 1), z3.BitVecVal(0, 1))
 
 
-def to_z3_bool(z3_expr: z3.ExprRef) -> z3.BoolRef:
+def to_z3_bool(z3_expr: Union[z3.BitVecRef, z3.BoolRef]) -> z3.BoolRef:
     if isinstance(z3_expr, z3.BoolRef):
         return z3_expr
-    elif isinstance(z3_expr, z3.BitVecRef):
-        return z3_expr == z3.BitVecVal(1, 1)
-    assert False
+    elif isinstance(z3_expr, z3.BitVecNumRef):
+        return z3.BoolVal(z3_expr)
+    return z3_expr == z3.BitVecVal(1, 1)
 
 
-def to_z3_non_bool(z3_expr: z3.ExprRef) -> z3.ExprRef:
-    if isinstance(z3_expr, z3.BoolRef):
-        return z3.If(z3_expr, z3.BitVecVal(1, 1), z3.BitVecVal(0, 1))
-    else:
-        return z3_expr
-
-
-def to_z3_array(z3_expr: z3.ExprRef) -> z3.ArrayRef:
-    if isinstance(z3_expr, z3.ArrayRef):
-        return z3_expr
-    assert False
+def try_bitvec_to_bool(z3_expr: z3.ExprRef) -> z3.ExprRef:
+    if isinstance(z3_expr, z3.BitVecRef) and z3_expr.size() == 1:
+        return to_z3_bool(z3_expr)
+    return z3_expr
 
 
 def to_z3_eq(z3_expr1: z3.ExprRef, z3_expr2: z3.ExprRef) -> z3.BoolRef:
     if isinstance(z3_expr1, z3.BoolRef) or isinstance(z3_expr2, z3.BoolRef):
         return to_z3_bool(z3_expr1) == to_z3_bool(z3_expr2)
-    else:
-        return z3_expr1 == z3_expr2
+    return z3_expr1 == z3_expr2
 
 
 # noinspection PyProtectedMember
-def z3_bitvec_binary_op(z3_mk_bv: Callable[[Any, Any, Any], Any],
-                        z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
+def call_z3_mk_bv(z3_mk_bv: Callable[[Any, Any, Any], Any],
+                  z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
     # noinspection PyPackageRequirements
     from z3.z3 import _coerce_exprs  # type: ignore
     a, b = _coerce_exprs(z3_bitvec1, z3_bitvec2)
     return z3.BitVecRef(z3_mk_bv(z3_bitvec1.ctx_ref(), a.as_ast(), b.as_ast()), z3_bitvec1.ctx)
+
+
+class Z3ExprMemo:
+    z3_bitvec_or_bool_m: Dict[int, Union[z3.BitVecRef, z3.BoolRef]]
+    z3_array_m: Dict[int, z3.ArrayRef]
+
+    def __init__(self):
+        self.z3_bitvec_or_bool_m = {}
+        self.z3_array_m = {}
 
 
 class Node(ABC):
@@ -78,10 +74,6 @@ class Sort(Node):
     def to_z3_sort(self) -> z3.SortRef:
         raise NotImplementedError
 
-    @abstractmethod
-    def booleanizable(self):
-        raise NotImplementedError
-
 
 class BitvecSort(Sort):
     width: int
@@ -90,11 +82,10 @@ class BitvecSort(Sort):
         super().__init__(sid, symbol)
         self.width = width
 
-    def to_z3_sort(self) -> z3.SortRef:
+    def to_z3_sort(self) -> Union[z3.BitVecSortRef, z3.BoolSortRef]:
+        if self.width == 1:
+            return z3.BoolSort()
         return z3.BitVecSort(self.width)
-
-    def booleanizable(self) -> bool:
-        return self.width == 1
 
 
 class ArraySort(Sort):
@@ -106,11 +97,8 @@ class ArraySort(Sort):
         self.index_sort = index_sort
         self.element_sort = element_sort
 
-    def to_z3_sort(self) -> z3.SortRef:
+    def to_z3_sort(self) -> z3.ArraySortRef:
         return z3.ArraySort(self.index_sort.to_z3_sort(), self.element_sort.to_z3_sort())
-
-    def booleanizable(self):
-        return False
 
 
 class Expr(Node):
@@ -122,22 +110,8 @@ class Expr(Node):
         self.nid = nid
         self.sort = sort
 
-    def to_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        if self.nid in m:
-            return m[self.nid]
-        else:
-            z3_expr: z3.ExprRef = self.to_fresh_z3_expr(m)
-            m[self.nid] = z3_expr
-            return z3_expr
-
-    def booleanizable(self):
-        return self.sort.booleanizable()
-
-    def get_z3_sort(self) -> z3.SortRef:
-        return self.sort.to_z3_sort()
-
     @abstractmethod
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
+    def to_z3_expr(self, m: Z3ExprMemo) -> z3.ExprRef:
         raise NotImplementedError
 
 
@@ -147,13 +121,21 @@ class Bitvec(Expr, ABC):
     def __init__(self, nid: int, sort: BitvecSort, symbol: str = ""):
         super().__init__(nid, sort, symbol)
 
-    def width(self) -> int:
-        return self.sort.width
+    def to_z3_expr(self, m: Z3ExprMemo) -> Union[z3.BitVecRef, z3.BoolRef]:
+        if self.nid in m.z3_bitvec_or_bool_m:
+            return m.z3_bitvec_or_bool_m[self.nid]
+        z3_bitvec_or_bool: Union[z3.BitVecRef, z3.BoolRef] = self.to_new_z3_expr(m)
+        m.z3_bitvec_or_bool_m[self.nid] = z3_bitvec_or_bool
+        return z3_bitvec_or_bool
 
-    def to_z3_bitvec(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
+    @abstractmethod
+    def to_new_z3_expr(self, m: Z3ExprMemo) -> Union[z3.BitVecRef, z3.BoolRef]:
+        raise NotImplementedError
+
+    def to_z3_bitvec(self, m: Z3ExprMemo) -> z3.BitVecRef:
         return to_z3_bitvec(self.to_z3_expr(m))
 
-    def to_z3_bool(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
+    def to_z3_bool(self, m: Z3ExprMemo) -> z3.BoolRef:
         return to_z3_bool(self.to_z3_expr(m))
 
 
@@ -163,8 +145,16 @@ class Array(Expr, ABC):
     def __init__(self, nid: int, sort: ArraySort, symbol: str = ""):
         super().__init__(nid, sort, symbol)
 
-    def to_z3_array(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ArrayRef:
-        return to_z3_array(self.to_z3_expr(m))
+    def to_z3_expr(self, m: Z3ExprMemo) -> z3.ArrayRef:
+        if self.nid in m.z3_array_m:
+            return m.z3_array_m[self.nid]
+        z3_array: z3.ArrayRef = self.to_new_z3_expr(m)
+        m.z3_array_m[self.nid] = z3_array
+        return z3_array
+
+    @abstractmethod
+    def to_new_z3_expr(self, m: Z3ExprMemo) -> z3.ArrayRef:
+        raise NotImplementedError
 
 
 class Minus(Bitvec):
@@ -174,24 +164,21 @@ class Minus(Bitvec):
         super().__init__(-bitvec.nid, bitvec.sort)
         self.bitvec = bitvec
 
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        return z3_minus(self.bitvec.to_z3_expr(m))
+    def to_new_z3_expr(self, m: Z3ExprMemo) -> Union[z3.BitVecRef, z3.BoolRef]:
+        z3_expr: Union[z3.BitVecRef, z3.BoolRef] = self.bitvec.to_z3_expr(m)
+        if isinstance(z3_expr, z3.BitVecRef):
+            return ~z3_expr
+        return z3.Not(z3_expr)
 
 
 class BitvecInput(Bitvec):
-    def to_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        return m[self.nid]
-
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        return z3.FreshConst(self.get_z3_sort(), self.symbol)
+    def to_new_z3_expr(self, m: Z3ExprMemo) -> Union[z3.BitVecRef, z3.BoolRef]:
+        raise ValueError
 
 
 class ArrayInput(Array):
-    def to_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        return m[self.nid]
-
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        return z3.FreshConst(self.get_z3_sort(), self.symbol)
+    def to_new_z3_expr(self, m: Z3ExprMemo) -> z3.ArrayRef:
+        raise ValueError
 
 
 class Constant(Bitvec):
@@ -201,9 +188,10 @@ class Constant(Bitvec):
         super().__init__(nid, sort, symbol)
         self.value = value
 
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        return z3.BoolVal(self.value) if self.booleanizable() else z3.BitVecVal(self.value,
-                                                                                self.width())
+    def to_new_z3_expr(self, m: Z3ExprMemo) -> Union[z3.BitVecRef, z3.BoolRef]:
+        if self.sort.width == 1:
+            return z3.BoolVal(self.value)
+        return z3.BitVecVal(self.value, self.sort.width)
 
 
 class One(Constant):
@@ -236,38 +224,36 @@ class Consth(Constant):
         super().__init__(nid, sort, int(hex_str, 16), symbol)
 
 
-# noinspection DuplicatedCode
-class BitvecState(Bitvec):
+class State:
+    init: Optional[Expr]
+    next: Optional[Expr]
+
+    def __init__(self):
+        self.init = None
+        self.next = None
+
+
+class BitvecState(Bitvec, State):
     init: Optional[Bitvec]
     next: Optional[Bitvec]
 
     def __init__(self, nid: int, sort: BitvecSort, symbol: str = ""):
-        super().__init__(nid, sort, symbol)
-        self.init = None
-        self.next = None
+        Bitvec.__init__(self, nid, sort, symbol)
+        State.__init__(self)
 
-    def to_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        return m[self.nid]
-
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        return z3.FreshConst(self.get_z3_sort(), self.symbol)
+    def to_new_z3_expr(self, m: Z3ExprMemo) -> Union[z3.BitVecRef, z3.BoolRef]:
+        raise ValueError
 
 
-# noinspection DuplicatedCode
-class ArrayState(Array):
-    init: Optional[Expr]
+class ArrayState(Array, State):
     next: Optional[Array]
 
     def __init__(self, nid: int, sort: ArraySort, symbol: str = ""):
-        super().__init__(nid, sort, symbol)
-        self.init = None
-        self.next = None
+        Array.__init__(self, nid, sort, symbol)
+        State.__init__(self)
 
-    def to_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        return m[self.nid]
-
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        return z3.FreshConst(self.get_z3_sort(), self.symbol)
+    def to_new_z3_expr(self, m: Z3ExprMemo) -> z3.ArrayRef:
+        raise ValueError
 
 
 class Ext(Bitvec, ABC):
@@ -279,18 +265,15 @@ class Ext(Bitvec, ABC):
         self.bitvec = bitvec
         self.w = w
 
-    def get_child_z3_bitvec(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return self.bitvec.to_z3_bitvec(m)
-
 
 class Sext(Ext):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return z3.SignExt(self.w, self.get_child_z3_bitvec(m))
+    def to_new_z3_expr(self, m: Z3ExprMemo) -> z3.BitVecRef:
+        return z3.SignExt(self.w, self.bitvec.to_z3_bitvec(m))
 
 
 class Uext(Ext):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return z3.ZeroExt(self.w, self.get_child_z3_bitvec(m))
+    def to_new_z3_expr(self, m: Z3ExprMemo) -> z3.BitVecRef:
+        return z3.ZeroExt(self.w, self.bitvec.to_z3_bitvec(m))
 
 
 class Slice(Bitvec):
@@ -305,7 +288,7 @@ class Slice(Bitvec):
         self.upper = upper
         self.lower = lower
 
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
+    def to_new_z3_expr(self, m: Z3ExprMemo) -> z3.BitVecRef:
         return z3.Extract(self.upper, self.lower, self.bitvec.to_z3_bitvec(m))
 
 
@@ -316,53 +299,78 @@ class BitvecUnaryOp(Bitvec, ABC):
         super().__init__(nid, sort, symbol)
         self.bitvec = bitvec
 
-    def get_child_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        return self.bitvec.to_z3_expr(m)
+    def to_new_z3_expr(self, m: Z3ExprMemo) -> Union[z3.BitVecRef, z3.BoolRef]:
+        z3_bitvec_or_bool: Union[z3.BitVecRef, z3.BoolRef] = self.bitvec.to_z3_expr(m)
+        if isinstance(z3_bitvec_or_bool, z3.BitVecRef):
+            return self.z3_unary_bitvec_op(z3_bitvec_or_bool)
+        return self.z3_unary_bool_op(z3_bitvec_or_bool)
 
-    def get_child_z3_bitvec(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return self.bitvec.to_z3_bitvec(m)
+    @abstractmethod
+    def z3_unary_bitvec_op(self, z3_bitvec: z3.BitVecRef) -> Union[z3.BitVecRef, z3.BoolRef]:
+        raise NotImplementedError
 
-    def get_child_z3_bool(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return self.bitvec.to_z3_bool(m)
+    @abstractmethod
+    def z3_unary_bool_op(self, z3_bool: z3.BoolRef) -> Union[z3.BitVecRef, z3.BoolRef]:
+        raise NotImplementedError
 
 
 class Not(BitvecUnaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        return z3_minus(self.bitvec.to_z3_expr(m))
+    def z3_unary_bitvec_op(self, z3_bitvec: z3.BitVecRef) -> z3.BitVecRef:
+        return ~z3_bitvec
+
+    def z3_unary_bool_op(self, z3_bool: z3.BoolRef) -> z3.BoolRef:
+        return z3.Not(z3_bool)
 
 
 class Inc(BitvecUnaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return self.get_child_z3_bitvec(m) + 1
+    def z3_unary_bitvec_op(self, z3_bitvec: z3.BitVecRef) -> z3.BitVecRef:
+        return z3_bitvec + 1
+
+    def z3_unary_bool_op(self, z3_bool: z3.BoolRef) -> z3.BoolRef:
+        return z3.Not(z3_bool)
 
 
 class Dec(BitvecUnaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return self.get_child_z3_bitvec(m) + 1
+    def z3_unary_bitvec_op(self, z3_bitvec: z3.BitVecRef) -> z3.BitVecRef:
+        return z3_bitvec - 1
+
+    def z3_unary_bool_op(self, z3_bool: z3.BoolRef) -> z3.BoolRef:
+        return z3.Not(z3_bool)
 
 
 class Neg(BitvecUnaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return -self.get_child_z3_bitvec(m)
+    def z3_unary_bitvec_op(self, z3_bitvec: z3.BitVecRef) -> z3.BitVecRef:
+        return -z3_bitvec
+
+    def z3_unary_bool_op(self, z3_bool: z3.BoolRef) -> z3.BoolRef:
+        return z3.Not(z3_bool)
 
 
 class Redand(BitvecUnaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return z3.BVRedAnd(self.get_child_z3_bitvec(m))
+    def z3_unary_bitvec_op(self, z3_bitvec: z3.BitVecRef) -> z3.BitVecRef:
+        return z3.BVRedAnd(z3_bitvec)
+
+    def z3_unary_bool_op(self, z3_bool: z3.BoolRef) -> z3.BoolRef:
+        return z3_bool
 
 
 class Redor(BitvecUnaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return z3.BVRedOr(self.get_child_z3_bitvec(m))
+    def z3_unary_bitvec_op(self, z3_bitvec: z3.BitVecRef) -> z3.BitVecRef:
+        return z3.BVRedOr(z3_bitvec)
+
+    def z3_unary_bool_op(self, z3_bool: z3.BoolRef) -> z3.BoolRef:
+        return z3_bool
 
 
 class Redxor(BitvecUnaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        child_z3_bitvec: z3.BitVecRef = self.get_child_z3_bitvec(m)
-        z3_expr: z3.BitVecRef = z3.Extract(0, 0, child_z3_bitvec)
-        for i in range(1, self.width()):
-            z3_expr = z3_expr + z3.Extract(i, i, child_z3_bitvec)
+    def z3_unary_bitvec_op(self, z3_bitvec: z3.BitVecRef) -> z3.BitVecRef:
+        z3_expr: z3.BitVecRef = z3.Extract(0, 0, z3_bitvec)
+        for i in range(1, self.sort.width):
+            z3_expr = z3_expr ^ z3.Extract(i, i, z3_bitvec)
         return z3_expr
+
+    def z3_unary_bool_op(self, z3_bool: z3.BoolRef) -> z3.BoolRef:
+        return z3_bool
 
 
 class BitvecBinaryOp(Bitvec, ABC):
@@ -375,33 +383,38 @@ class BitvecBinaryOp(Bitvec, ABC):
         self.bitvec1 = bitvec1
         self.bitvec2 = bitvec2
 
-    def get_child1_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        return self.bitvec1.to_z3_expr(m)
+    def to_new_z3_expr(self, m: Z3ExprMemo) -> Union[z3.BitVecRef, z3.BoolRef]:
+        z3_expr1: Union[z3.BitVecRef, z3.BoolRef] = self.bitvec1.to_z3_expr(m)
+        z3_expr2: Union[z3.BitVecRef, z3.BoolRef] = self.bitvec2.to_z3_expr(m)
+        if isinstance(z3_expr1, z3.BoolRef) or isinstance(z3_expr2, z3.BoolRef):
+            return self.z3_bool_op(to_z3_bool(z3_expr1), to_z3_bool(z3_expr2))
+        return self.z3_bitvec_op(z3_expr1, z3_expr2)
 
-    def get_child2_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        return self.bitvec2.to_z3_expr(m)
+    @abstractmethod
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef,
+                     z3_bitvec2: z3.BitVecRef) -> Union[z3.BitVecRef, z3.BoolRef]:
+        raise NotImplementedError
 
-    def get_child1_z3_bitvec(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return self.bitvec1.to_z3_bitvec(m)
-
-    def get_child2_z3_bitvec(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return self.bitvec2.to_z3_bitvec(m)
-
-    def get_child1_z3_bool(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return self.bitvec1.to_z3_bool(m)
-
-    def get_child2_z3_bool(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return self.bitvec2.to_z3_bool(m)
+    @abstractmethod
+    def z3_bool_op(self, z3_bool1: z3.BoolRef,
+                   z3_bool2: z3.BoolRef) -> Union[z3.BitVecRef, z3.BoolRef]:
+        raise NotImplementedError
 
 
 class Iff(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return self.get_child1_z3_bool(m) == self.get_child2_z3_bool(m)
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
+        return z3_bitvec1 == z3_bitvec2
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3_bool1 == z3_bool2
 
 
 class Implies(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return z3.Implies(self.get_child1_z3_bool(m), self.get_child2_z3_bool(m))
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
+        return z3.Or(z3_bitvec1 == z3.BitVecRef(0, 1), z3_bitvec2 == z3.BitVecRef(1, 1))
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.Implies(z3_bool1, z3_bool2)
 
 
 class Equality(Bitvec, ABC):
@@ -413,22 +426,16 @@ class Equality(Bitvec, ABC):
         self.expr1 = expr1
         self.expr2 = expr2
 
-    def get_child1_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        return self.expr1.to_z3_expr(m)
-
-    def get_child2_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        return self.expr2.to_z3_expr(m)
-
 
 class Eq(Equality):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return to_z3_eq(self.get_child1_z3_expr(m), self.get_child2_z3_expr(m))
+    def to_new_z3_expr(self, m: Z3ExprMemo) -> z3.BoolRef:
+        return to_z3_eq(self.expr1.to_z3_expr(m), self.expr2.to_z3_expr(m))
 
 
 class Neq(Equality):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        z3_expr1: z3.ExprRef = self.get_child1_z3_expr(m)
-        z3_expr2: z3.ExprRef = self.get_child2_z3_expr(m)
+    def to_new_z3_expr(self, m: Z3ExprMemo) -> z3.BoolRef:
+        z3_expr1: z3.ExprRef = self.expr1.to_z3_expr(m)
+        z3_expr2: z3.ExprRef = self.expr2.to_z3_expr(m)
         if isinstance(z3_expr1, z3.BoolRef) or isinstance(z3_expr2, z3.BoolRef):
             return to_z3_bool(z3_expr1) != to_z3_bool(z3_expr2)
         else:
@@ -436,311 +443,398 @@ class Neq(Equality):
 
 
 class Sgt(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return self.get_child1_z3_bitvec(m) > self.get_child2_z3_bitvec(m)
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
+        return z3_bitvec1 > z3_bitvec2
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.And(z3.Not(z3_bool1), z3_bool2)
 
 
 class Ugt(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return z3.UGT(self.get_child1_z3_bitvec(m), self.get_child2_z3_bitvec(m))
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
+        return z3.UGT(z3_bitvec1, z3_bitvec2)
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.And(z3_bool1, z3.Not(z3_bool2))
 
 
 class Sgte(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return self.get_child1_z3_bitvec(m) >= self.get_child2_z3_bitvec(m)
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
+        return z3_bitvec1 >= z3_bitvec2
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.Implies(z3_bool1, z3_bool2)
 
 
 class Ugte(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return z3.UGE(self.get_child1_z3_bitvec(m), self.get_child2_z3_bitvec(m))
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
+        return z3.UGE(z3_bitvec1, z3_bitvec2)
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.Implies(z3_bool2, z3_bool1)
 
 
 class Slt(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return self.get_child1_z3_bitvec(m) < self.get_child2_z3_bitvec(m)
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
+        return z3_bitvec1 < z3_bitvec2
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.And(z3_bool1, z3.Not(z3_bool2))
 
 
 class Ult(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return z3.ULT(self.get_child1_z3_bitvec(m), self.get_child2_z3_bitvec(m))
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
+        return z3.ULT(z3_bitvec1, z3_bitvec2)
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.And(z3.Not(z3_bool1), z3_bool2)
 
 
 class Slte(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return self.get_child1_z3_bitvec(m) <= self.get_child2_z3_bitvec(m)
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
+        return z3_bitvec1 <= z3_bitvec2
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.Implies(z3_bool2, z3_bool1)
 
 
 class Ulte(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return z3.ULE(self.get_child1_z3_bitvec(m), self.get_child2_z3_bitvec(m))
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
+        return z3.ULE(z3_bitvec1, z3_bitvec2)
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.Implies(z3_bool1, z3_bool2)
 
 
 class And(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        z3_expr1: z3.ExprRef = self.get_child1_z3_expr(m)
-        z3_expr2: z3.ExprRef = self.get_child2_z3_expr(m)
-        if isinstance(z3_expr1, z3.BoolRef) or isinstance(z3_expr2, z3.BoolRef):
-            return z3.And(to_z3_bool(z3_expr1), to_z3_bool(z3_expr2))
-        else:
-            assert isinstance(z3_expr1, z3.BitVecRef) and isinstance(z3_expr2, z3.BitVecRef)
-            return z3_expr1 & z3_expr2
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
+        return z3_bitvec1 & z3_bitvec2
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.And(z3_bool1, z3_bool2)
 
 
 class Nand(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        z3_expr1: z3.ExprRef = self.get_child1_z3_expr(m)
-        z3_expr2: z3.ExprRef = self.get_child2_z3_expr(m)
-        if isinstance(z3_expr1, z3.BoolRef) or isinstance(z3_expr2, z3.BoolRef):
-            return z3.Not(z3.And(to_z3_bool(z3_expr1), to_z3_bool(z3_expr2)))
-        else:
-            assert isinstance(z3_expr1, z3.BitVecRef) and isinstance(z3_expr2, z3.BitVecRef)
-            return z3_bitvec_binary_op(z3.Z3_mk_bvnand, z3_expr1, z3_expr2)
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
+        return call_z3_mk_bv(z3.Z3_mk_bvnand, z3_bitvec1, z3_bitvec2)
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.Not(z3.And(z3_bool1, z3_bool2))
 
 
 class Nor(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        z3_expr1: z3.ExprRef = self.get_child1_z3_expr(m)
-        z3_expr2: z3.ExprRef = self.get_child2_z3_expr(m)
-        if isinstance(z3_expr1, z3.BoolRef) or isinstance(z3_expr2, z3.BoolRef):
-            return z3.Not(z3.Or(to_z3_bool(z3_expr1), to_z3_bool(z3_expr2)))
-        else:
-            assert isinstance(z3_expr1, z3.BitVecRef) and isinstance(z3_expr2, z3.BitVecRef)
-            return z3_bitvec_binary_op(z3.Z3_mk_bvnor, z3_expr1, z3_expr2)
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
+        return call_z3_mk_bv(z3.Z3_mk_bvnor, z3_bitvec1, z3_bitvec2)
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.Not(z3.Or(z3_bool1, z3_bool2))
 
 
 class Or(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        z3_expr1: z3.ExprRef = self.get_child1_z3_expr(m)
-        z3_expr2: z3.ExprRef = self.get_child2_z3_expr(m)
-        if isinstance(z3_expr1, z3.BoolRef) or isinstance(z3_expr2, z3.BoolRef):
-            return z3.Or(to_z3_bool(z3_expr1), to_z3_bool(z3_expr2))
-        else:
-            assert isinstance(z3_expr1, z3.BitVecRef) and isinstance(z3_expr2, z3.BitVecRef)
-            return z3_expr1 | z3_expr2
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
+        return z3_bitvec1 | z3_bitvec2
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.Or(z3_bool1, z3_bool2)
 
 
 class Xnor(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        z3_expr1: z3.ExprRef = self.get_child1_z3_expr(m)
-        z3_expr2: z3.ExprRef = self.get_child2_z3_expr(m)
-        if isinstance(z3_expr1, z3.BoolRef) or isinstance(z3_expr2, z3.BoolRef):
-            return z3.Not(z3.Xor(to_z3_bool(z3_expr1), to_z3_bool(z3_expr2)))
-        else:
-            assert isinstance(z3_expr1, z3.BitVecRef) and isinstance(z3_expr2, z3.BitVecRef)
-            return z3_bitvec_binary_op(z3.Z3_mk_bvxnor, z3_expr1, z3_expr2)
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
+        return call_z3_mk_bv(z3.Z3_mk_bvxnor, z3_bitvec1, z3_bitvec2)
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.Not(z3.Xor(z3_bool1, z3_bool2))
 
 
 class Xor(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        z3_expr1: z3.ExprRef = self.get_child1_z3_expr(m)
-        z3_expr2: z3.ExprRef = self.get_child2_z3_expr(m)
-        if isinstance(z3_expr1, z3.BoolRef) or isinstance(z3_expr2, z3.BoolRef):
-            return z3.Xor(to_z3_bool(z3_expr1), to_z3_bool(z3_expr2))
-        else:
-            assert isinstance(z3_expr1, z3.BitVecRef) and isinstance(z3_expr2, z3.BitVecRef)
-            return z3_expr1 ^ z3_expr2
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
+        return z3_bitvec1 ^ z3_bitvec2
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.Xor(z3_bool1, z3_bool2)
 
 
 class Sll(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return self.get_child1_z3_bitvec(m) << self.get_child2_z3_bitvec(m)
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
+        return z3_bitvec1 << z3_bitvec2
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.And(z3_bool1, z3.Not(z3_bool2))
 
 
 class Sra(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return self.get_child1_z3_bitvec(m) >> self.get_child2_z3_bitvec(m)
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
+        return z3_bitvec1 >> z3_bitvec2
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3_bool1
 
 
 class Srl(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return z3.LShR(self.get_child1_z3_bitvec(m), self.get_child2_z3_bitvec(m))
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
+        return z3.LShR(z3_bitvec1, z3_bitvec2)
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.And(z3_bool1, z3.Not(z3_bool2))
 
 
 class Rol(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return z3.RotateLeft(self.get_child1_z3_bitvec(m), self.get_child2_z3_bitvec(m))
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
+        return z3.RotateLeft(z3_bitvec1, z3_bitvec2)
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3_bool1
 
 
 class Ror(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return z3.RotateRight(self.get_child1_z3_bitvec(m), self.get_child2_z3_bitvec(m))
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
+        return z3.RotateRight(z3_bitvec1, z3_bitvec2)
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3_bool1
 
 
 class Add(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return self.get_child1_z3_bitvec(m) + self.get_child2_z3_bitvec(m)
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
+        return z3_bitvec1 + z3_bitvec2
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.Xor(z3_bool1, z3_bool2)
 
 
 class Mul(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return self.get_child1_z3_bitvec(m) * self.get_child2_z3_bitvec(m)
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
+        return z3_bitvec1 * z3_bitvec2
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.And(z3_bool1, z3_bool2)
 
 
 class Sdiv(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return self.get_child1_z3_bitvec(m) / self.get_child2_z3_bitvec(m)
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
+        return z3_bitvec1 / z3_bitvec2
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.Implies(z3_bool2, z3_bool1)
 
 
 class Udiv(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return z3.UDiv(self.get_child1_z3_bitvec(m), self.get_child2_z3_bitvec(m))
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
+        return z3.UDiv(z3_bitvec1, z3_bitvec2)
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.Implies(z3_bool2, z3_bool1)
 
 
 class Smod(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return self.get_child1_z3_bitvec(m) % self.get_child2_z3_bitvec(m)
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
+        return z3_bitvec1 % z3_bitvec2
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.And(z3_bool1, z3.Not(z3_bool2))
 
 
 class Srem(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return z3.SRem(self.get_child1_z3_bitvec(m), self.get_child2_z3_bitvec(m))
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
+        return z3.SRem(z3_bitvec1, z3_bitvec2)
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.And(z3_bool1, z3.Not(z3_bool2))
 
 
 class Urem(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return z3.URem(self.get_child1_z3_bitvec(m), self.get_child2_z3_bitvec(m))
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
+        return z3.URem(z3_bitvec1, z3_bitvec2)
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.And(z3_bool1, z3.Not(z3_bool2))
 
 
 class Sub(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return self.get_child1_z3_bitvec(m) - self.get_child2_z3_bitvec(m)
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
+        return z3_bitvec1 - z3_bitvec2
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.Xor(z3_bool1, z3_bool2)
 
 
 class Saddo(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return z3.Not(z3.Or(
-            (z3.BVAddNoOverflow(self.get_child1_z3_bitvec(m), self.get_child2_z3_bitvec(m), True),
-             z3.BVAddNoUnderflow(self.get_child1_z3_bitvec(m), self.get_child2_z3_bitvec(m)))))
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
+        return z3.Not(z3.Or((z3.BVAddNoOverflow(z3_bitvec1, z3_bitvec2, True),
+                             z3.BVAddNoUnderflow(z3_bitvec1, z3_bitvec2))))
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.BoolVal(False)
 
 
 class Uaddo(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return z3.Not(
-            z3.BVAddNoOverflow(self.get_child1_z3_bitvec(m), self.get_child2_z3_bitvec(m), False))
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
+        return z3.Not(z3.BVAddNoOverflow(z3_bitvec1, z3_bitvec2, False))
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.And(z3_bool1, z3_bool2)
 
 
 class Sdivo(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return z3.Not(
-            z3.BVSDivNoOverflow(self.get_child1_z3_bitvec(m), self.get_child2_z3_bitvec(m)))
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
+        return z3.Not(z3.BVSDivNoOverflow(z3_bitvec1, z3_bitvec2))
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.And(z3_bool1, z3_bool2)
 
 
 class Udivo(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
+        return z3.BoolVal(False)
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
         return z3.BoolVal(False)
 
 
 class Smulo(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return z3.Not(z3.Or(
-            (z3.BVMulNoOverflow(self.get_child1_z3_bitvec(m), self.get_child2_z3_bitvec(m), True),
-             z3.BVMulNoUnderflow(self.get_child1_z3_bitvec(m), self.get_child2_z3_bitvec(m)))))
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
+        return z3.Not(z3.Or((z3.BVMulNoOverflow(z3_bitvec1, z3_bitvec2, True),
+                             z3.BVMulNoUnderflow(z3_bitvec1, z3_bitvec2))))
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.BoolVal(False)
 
 
 class Umulo(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return z3.Not(
-            z3.BVMulNoOverflow(self.get_child1_z3_bitvec(m), self.get_child2_z3_bitvec(m), False))
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
+        return z3.Not(z3.BVMulNoOverflow(z3_bitvec1, z3_bitvec2, False))
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.BoolVal(False)
 
 
 class Ssubo(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return z3.Not(z3.Or(
-            (z3.BVSubNoUnderflow(self.get_child1_z3_bitvec(m), self.get_child2_z3_bitvec(m), True),
-             z3.BVSubNoOverflow(self.get_child1_z3_bitvec(m), self.get_child2_z3_bitvec(m)))))
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
+        return z3.Not(z3.Or((z3.BVSubNoUnderflow(z3_bitvec1, z3_bitvec2, True),
+                             z3.BVSubNoOverflow(z3_bitvec1, z3_bitvec2))))
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.BoolVal(False)
 
 
 class Usubo(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BoolRef:
-        return z3.Not(
-            z3.BVSubNoUnderflow(self.get_child1_z3_bitvec(m), self.get_child2_z3_bitvec(m), False))
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
+        return z3.Not(z3.BVSubNoUnderflow(z3_bitvec1, z3_bitvec2, False))
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
+        return z3.And(z3_bool1, z3.Not(z3_bool2))
 
 
 class Concat(BitvecBinaryOp):
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.BitVecRef:
-        return z3.Concat(self.get_child1_z3_bitvec(m), self.get_child2_z3_bitvec(m))
+    def to_new_z3_expr(self, m: Z3ExprMemo) -> Union[z3.BitVecRef, z3.BoolRef]:
+        return z3.Concat(self.bitvec1.to_z3_bitvec(m), self.bitvec2.to_z3_bitvec(m))
+
+    def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
+        raise ValueError
+
+    def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BitVecRef:
+        raise ValueError
 
 
-class BitvecRead(Bitvec):
+class Read:
     array: Array
-    expr: Expr
+    index_expr: Expr
 
-    def __init__(self, nid: int, sort: BitvecSort, array: Array, expr: Expr, symbol: str = ""):
-        super().__init__(nid, sort, symbol)
+    def __init__(self, array: Array, index_expr: Expr):
         self.array = array
-        self.expr = expr
-
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        return self.array.to_z3_array(m)[to_z3_non_bool(self.expr.to_z3_expr(m))]
+        self.index_expr = index_expr
 
 
-class ArrayRead(Array):
-    array: Array
-    expr: Expr
+class BitvecRead(Bitvec, Read):
+    def __init__(self, nid: int, sort: BitvecSort, array: Array, index_expr: Expr,
+                 symbol: str = ""):
+        Bitvec.__init__(self, nid, sort, symbol)
+        Read.__init__(self, array, index_expr)
 
-    def __init__(self, nid: int, sort: ArraySort, array: Array, expr: Expr, symbol: str = ""):
-        super().__init__(nid, sort, symbol)
-        self.array = array
-        self.expr = expr
-
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        return self.array.to_z3_array(m)[to_z3_non_bool(self.expr.to_z3_expr(m))]
+    def to_new_z3_expr(self, m: Z3ExprMemo) -> z3.BitVecRef:
+        return self.array.to_z3_expr(m)[try_bitvec_to_bool(self.index_expr.to_z3_expr(m))]
 
 
-class ArrayIte(Array):
-    bitvec: Bitvec
-    array1: Array
-    array2: Array
+class ArrayRead(Array, Read):
+    def __init__(self, nid: int, sort: ArraySort, array: Array, index_expr: Expr, symbol: str = ""):
+        Array.__init__(self, nid, sort, symbol)
+        Read.__init__(self, array, index_expr)
 
-    def __init__(self, nid: int, sort: ArraySort, bitvec: Bitvec, array1: Array,
-                 array2: Array, symbol: str = ""):
-        super().__init__(nid, sort, symbol)
-        self.bitvec = bitvec
-        self.array1 = array1
-        self.array2 = array2
-
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        return z3.If(self.bitvec.to_z3_bool(m), self.array1.to_z3_expr(m),
-                     self.array2.to_z3_expr(m))
+    def to_new_z3_expr(self, m: Z3ExprMemo) -> z3.ArrayRef:
+        return self.array.to_z3_expr(m)[try_bitvec_to_bool(self.index_expr.to_z3_expr(m))]
 
 
-class BitvecIte(Bitvec):
-    bitvec: Bitvec
-    bitvec1: Bitvec
-    bitvec2: Bitvec
+class Ite:
+    cond_bitvec: Bitvec
+    then_expr: Expr
+    else_expr: Expr
 
-    def __init__(self, nid: int, sort: BitvecSort, bitvec: Bitvec, bitvec1: Bitvec,
-                 bitvec2: Bitvec, symbol: str = ""):
-        super().__init__(nid, sort, symbol)
-        self.bitvec = bitvec
-        self.bitvec1 = bitvec1
-        self.bitvec2 = bitvec2
+    def __init__(self, cond_bitvec: Bitvec, then_expr: Expr, else_expr: Expr):
+        self.cond_bitvec = cond_bitvec
+        self.then_expr = then_expr
+        self.else_expr = else_expr
 
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ExprRef:
-        z3_expr1: z3.ExprRef = self.bitvec1.to_z3_expr(m)
-        z3_expr2: z3.ExprRef = self.bitvec2.to_z3_expr(m)
-        if isinstance(z3_expr1, z3.BoolRef) or isinstance(z3_expr2, z3.BoolRef):
-            return z3.If(self.bitvec.to_z3_bool(m), to_z3_bool(z3_expr1), to_z3_bool(z3_expr2))
-        else:
-            return z3.If(self.bitvec.to_z3_bool(m), z3_expr1, z3_expr2)
+
+class ArrayIte(Array, Ite):
+    then_expr: Array
+    else_expr: Array
+
+    def __init__(self, nid: int, sort: ArraySort, cond_bitvec: Bitvec, then_expr: Array,
+                 else_expr: Array, symbol: str = ""):
+        Array.__init__(self, nid, sort, symbol)
+        Ite.__init__(self, cond_bitvec, then_expr, else_expr)
+
+    def to_new_z3_expr(self, m: Z3ExprMemo) -> z3.ArrayRef:
+        cond_z3_bitvec: z3.BoolRef = self.cond_bitvec.to_z3_bool(m)
+        if z3.is_true(cond_z3_bitvec):
+            return self.then_expr.to_z3_expr(m)
+        elif z3.is_false(cond_z3_bitvec):
+            return self.else_expr.to_z3_expr(m)
+        return z3.If(self.cond_bitvec.to_z3_bool(m), self.then_expr.to_z3_expr(m),
+                     self.else_expr.to_z3_expr(m))
+
+
+class BitvecIte(Bitvec, Ite):
+    then_expr: Bitvec
+    else_expr: Bitvec
+
+    def __init__(self, nid: int, sort: BitvecSort, cond_bitvec: Bitvec, then_expr: Bitvec,
+                 else_expr: Bitvec, symbol: str = ""):
+        Bitvec.__init__(self, nid, sort, symbol)
+        Ite.__init__(self, cond_bitvec, then_expr, else_expr)
+
+    def to_new_z3_expr(self, m: Z3ExprMemo) -> Union[z3.BitVecRef, z3.BoolRef]:
+        cond_z3_bitvec: z3.BoolRef = self.cond_bitvec.to_z3_bool(m)
+        then_z3_expr: Union[z3.BitVecRef, z3.BoolRef] = self.then_expr.to_z3_expr(m)
+        else_z3_expr: Union[z3.BitVecRef, z3.BoolRef] = self.else_expr.to_z3_expr(m)
+
+        if z3.is_true(cond_z3_bitvec):
+            return then_z3_expr
+        elif z3.is_false(cond_z3_bitvec):
+            return else_z3_expr
+
+        if isinstance(then_z3_expr, z3.BoolRef) or isinstance(else_z3_expr, z3.BoolRef):
+            then_z3_expr = to_z3_bool(then_z3_expr)
+            else_z3_expr = to_z3_bool(else_z3_expr)
+        return z3.If(self.cond_bitvec.to_z3_bool(m), then_z3_expr, else_z3_expr)
 
 
 class Write(Array):
     array: Array
-    expr1: Expr
-    expr2: Expr
+    index_expr: Expr
+    element_expr: Expr
 
-    def __init__(self, nid: int, sort: ArraySort, array: Array, expr1: Expr, expr2: Expr,
-                 symbol: str = ""):
+    def __init__(self, nid: int, sort: ArraySort, array: Array, index_expr: Expr,
+                 element_expr: Expr, symbol: str = ""):
         super().__init__(nid, sort, symbol)
         self.array = array
-        self.expr1 = expr1
-        self.expr2 = expr2
+        self.index_expr = index_expr
+        self.element_expr = element_expr
 
-    def to_fresh_z3_expr(self, m: MutableMapping[int, z3.ExprRef]) -> z3.ArrayRef:
-        return z3.Update(self.array.to_z3_array(m),
-                         to_z3_non_bool(self.expr1.to_z3_expr(m)),
-                         to_z3_non_bool(self.expr2.to_z3_expr(m)))
+    def to_new_z3_expr(self, m: Z3ExprMemo) -> z3.ArrayRef:
+        return z3.Update(self.array.to_z3_expr(m),
+                         try_bitvec_to_bool(self.index_expr.to_z3_expr(m)),
+                         try_bitvec_to_bool(self.element_expr.to_z3_expr(m)))
 
 
 class BitvecInit(Node):
@@ -873,17 +967,33 @@ class Ts:
         self.bads = []
         self.constraints = []
 
-    def put_var(self, sort: z3.SortRef, prefix: str = "") -> Tuple[z3.ExprRef, z3.ExprRef]:
-        pre_z3_expr: z3.ExprRef = z3.FreshConst(sort, "v" + prefix)
-        post_z3_expr: z3.ExprRef = z3.FreshConst(sort, "v_out" + prefix)
+    def put_bitvec_or_bool_var(self, sort: Union[z3.BitVecSortRef, z3.BoolSortRef],
+                               prefix: str = "") -> Union[Tuple[z3.BitVecRef, z3.BitVecRef],
+                                                          Tuple[z3.BoolRef, z3.BoolRef]]:
+        pre_z3_expr: Union[z3.BitVecRef, z3.BoolRef] = z3.FreshConst(sort, "vi" + prefix)
+        post_z3_expr: Union[z3.BitVecRef, z3.BoolRef] = z3.FreshConst(sort, "vo" + prefix)
         self.pre_vars.append(pre_z3_expr)
         self.post_vars.append(post_z3_expr)
         return pre_z3_expr, post_z3_expr
 
-    def put_input(self, sort: z3.SortRef, prefix: str = "") -> z3.ExprRef:
-        input_z3_expr: z3.ExprRef = z3.FreshConst(sort, "i" + prefix)
-        self.inputs.append(input_z3_expr)
-        return input_z3_expr
+    def put_array_var(self, sort: z3.ArraySortRef,
+                      prefix: str = "") -> Tuple[z3.ArrayRef, z3.ArrayRef]:
+        pre_z3_expr: z3.ArrayRef = z3.FreshConst(sort, "vi" + prefix)
+        post_z3_expr: z3.ArrayRef = z3.FreshConst(sort, "vo" + prefix)
+        self.pre_vars.append(pre_z3_expr)
+        self.post_vars.append(post_z3_expr)
+        return pre_z3_expr, post_z3_expr
+
+    def put_bitvec_or_bool_input(self, sort: Union[z3.BitVecSortRef, z3.BoolSortRef],
+                                 prefix: str = "") -> Union[z3.BitVecRef, z3.BoolRef]:
+        z3_expr: Union[z3.BitVecRef, z3.BoolRef] = z3.FreshConst(sort, "i" + prefix)
+        self.inputs.append(z3_expr)
+        return z3_expr
+
+    def put_array_input(self, sort: z3.ArraySortRef, prefix: str = "") -> z3.ArrayRef:
+        z3_expr: z3.ArrayRef = z3.FreshConst(sort, "i" + prefix)
+        self.inputs.append(z3_expr)
+        return z3_expr
 
     def sig(self) -> List[z3.SortRef]:
         return [v.sort() for v in self.post_vars]
@@ -925,23 +1035,30 @@ class Ts:
             self.constraints = []
 
 
-def generate_vc(ts: Ts) -> Tuple[z3.ExprRef, z3.ExprRef, z3.ExprRef, z3.FuncDeclRef]:
+def generate_vc(ts: Ts, simplify: bool = True) -> Tuple[z3.ExprRef, z3.ExprRef,
+                                                        z3.ExprRef, z3.FuncDeclRef]:
     if len(ts.bads) > 1 or ts.constraints:
         raise NotImplementedError
     vars_and_inputs: List[z3.ExprRef] = ts.vars_and_inputs()
     inv: z3.FuncDeclRef = ts.inv()
     inv_pre: z3.ExprRef = inv(*ts.pre_vars)
     inv_post: z3.ExprRef = inv(*ts.post_vars)
+
+    init: z3.ExprRef = z3.Implies(ts.init, inv_pre)
+    tr: z3.ExprRef = z3.Implies(z3.And(inv_pre, ts.tr), inv_post)
+    bad: z3.ExprRef = z3.Implies(z3.And(inv_pre, ts.bad()), False)
+
     if vars_and_inputs:
-        return (z3.ForAll(vars_and_inputs, z3.Implies(ts.init, inv_pre)),
-                z3.ForAll(vars_and_inputs, z3.Implies(z3.And(inv_pre, ts.tr), inv_post)),
-                z3.ForAll(vars_and_inputs, z3.Implies(z3.And(inv_pre, ts.bad()), False)),
-                inv)
-    else:
-        return (z3.Implies(ts.init, inv_pre),
-                z3.Implies(z3.And(inv_pre, ts.tr), inv_post),
-                z3.Implies(z3.And(inv_pre, ts.bad()), False),
-                inv)
+        init = z3.ForAll(vars_and_inputs, init)
+        tr = z3.ForAll(vars_and_inputs, tr)
+        bad = z3.ForAll(vars_and_inputs, bad)
+
+    if simplify:
+        init = z3.simplify(init)
+        tr = z3.simplify(tr)
+        bad = z3.simplify(bad)
+
+    return init, tr, bad, inv
 
 
 def generate_chc_str(init: z3.ExprRef, tr: z3.ExprRef, bad: z3.ExprRef,
@@ -953,7 +1070,6 @@ def generate_chc_str(init: z3.ExprRef, tr: z3.ExprRef, bad: z3.ExprRef,
             "(assert {:s})\n".format(tr.sexpr()),
             "(assert {:s})\n".format(bad.sexpr()),
             "(check-sat)\n",
-            "(get-model)\n",
             "(exit)\n"]
 
 
@@ -1326,23 +1442,27 @@ class Btor2Parser:
         z3_expr1: z3.ExprRef
         z3_expr2: z3.ExprRef
 
-        m: Dict[int, z3.ExprRef] = {}
-        m_post: Dict[int, z3.ExprRef] = {}
+        m: Z3ExprMemo = Z3ExprMemo()
+        m_post: Z3ExprMemo = Z3ExprMemo()
         z3_inits: List[z3.ExprRef] = []
         # noinspection SpellCheckingInspection
         z3_nexts: List[z3.ExprRef] = []
 
         for nid, bitvec_input in self.bitvec_input_table.items():
-            m[nid] = m_post[nid] = ts.put_input(bitvec_input.sort.to_z3_sort(), bitvec_input.symbol)
+            m.z3_bitvec_or_bool_m[nid] = ts.put_bitvec_or_bool_input(bitvec_input.sort.to_z3_sort(),
+                                                                     bitvec_input.symbol)
 
         for nid, array_input in self.array_input_table.items():
-            m[nid] = m_post[nid] = ts.put_input(array_input.sort.to_z3_sort(), array_input.symbol)
+            m.z3_array_m[nid] = ts.put_array_input(array_input.sort.to_z3_sort(),
+                                                   array_input.symbol)
 
         for nid, bitvec_state in self.bitvec_state_table.items():
-            (m[nid], m_post[nid]) = ts.put_var(bitvec_state.sort.to_z3_sort(), bitvec_state.symbol)
+            (m.z3_bitvec_or_bool_m[nid], m_post.z3_bitvec_or_bool_m[nid]) = \
+                ts.put_bitvec_or_bool_var(bitvec_state.sort.to_z3_sort(), bitvec_state.symbol)
 
         for nid, array_state in self.array_state_table.items():
-            (m[nid], m_post[nid]) = ts.put_var(array_state.sort.to_z3_sort(), array_state.symbol)
+            (m.z3_array_m[nid], m_post.z3_array_m[nid]) = \
+                ts.put_array_var(array_state.sort.to_z3_sort(), array_state.symbol)
 
         # noinspection DuplicatedCode
         for nid, bitvec_state in self.bitvec_state_table.items():
@@ -1359,7 +1479,8 @@ class Btor2Parser:
                 if array_state.sort.element_sort == array_state.init.sort:
                     z3_inits.append(to_z3_eq(array_state.to_z3_expr(m),
                                              z3.K(array_state.sort.index_sort.to_z3_sort(),
-                                                  to_z3_non_bool(array_state.init.to_z3_expr(m)))))
+                                                  try_bitvec_to_bool(
+                                                      array_state.init.to_z3_expr(m)))))
                 else:
                     z3_inits.append(
                         to_z3_eq(array_state.to_z3_expr(m), array_state.init.to_z3_expr(m)))
@@ -1374,6 +1495,22 @@ class Btor2Parser:
         return ts
 
 
+def btor2chc(input_file: TextIO, output_file: TextIO) -> None:
+    btor2_parser: Btor2Parser = Btor2Parser()
+    btor2_parser.parse(input_file)
+    ts: Ts = btor2_parser.to_ts()
+    ts.reduce_constraints()
+    ts.reduce_bads()
+
+    init: z3.ExprRef
+    tr: z3.ExprRef
+    bad: z3.ExprRef
+    inv: z3.FuncDeclRef
+    init, tr, bad, inv = generate_vc(ts)
+    db: HornClauseDb = generate_horn_clause_db(init, tr, bad)
+    pp_chc_as_smt(db, output_file)
+
+
 def main():
     import argparse
     parser: argparse.ArgumentParser = argparse.ArgumentParser(
@@ -1383,14 +1520,11 @@ def main():
 
     args: argparse.Namespace = parser.parse_args()
 
+    input_file: TextIO
+    output_file: TextIO
     with open(args.input) as input_file:
         with open(args.output, 'w+') as output_file:
-            btor2_parser: Btor2Parser = Btor2Parser()
-            btor2_parser.parse(input_file)
-            ts: Ts = btor2_parser.to_ts()
-            ts.reduce_constraints()
-            ts.reduce_bads()
-            output_file.writelines(generate_chc_str(*generate_vc(ts)))
+            btor2chc(input_file, output_file)
 
 
 if __name__ == '__main__':
