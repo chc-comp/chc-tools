@@ -3,7 +3,7 @@ from typing import Optional, List, TextIO, Union, Dict, Tuple, Callable, Any
 
 # noinspection PyPackageRequirements
 import z3  # type: ignore
-from .horndb import HornClauseDb  # type: ignore
+from .horndb import HornClauseDb, HornRule  # type: ignore
 
 
 def to_z3_bitvec(z3_expr: Union[z3.BitVecRef, z3.BoolRef]) -> z3.BitVecRef:
