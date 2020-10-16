@@ -1,23 +1,25 @@
-import sys
-import z3  # type: ignore
 import io
+import sys
 
 import pysmt.environment  # type: ignore
 import pysmt.solvers.z3 as pyz3  # type: ignore
+import z3  # type: ignore
 from pysmt.smtlib.parser import SmtLibZ3Parser, Tokenizer  # type: ignore
+
 
 def ground_quantifier(qexpr):
     body = qexpr.body()
 
-    vars = list()
+    var_list = list()
     for i in reversed(range(qexpr.num_vars())):
         vi_name = qexpr.var_name(i)
         vi_sort = qexpr.var_sort(i)
         vi = z3.Const(vi_name, vi_sort)
-        vars.append(vi)
+        var_list.append(vi)
 
-    body = z3.substitute_vars(body, *vars)
-    return (body, vars)
+    body = z3.substitute_vars(body, *var_list)
+    return body, var_list
+
 
 def find_all_uninterp_consts(formula, res):
     if z3.is_quantifier(formula):
@@ -38,8 +40,10 @@ def find_all_uninterp_consts(formula, res):
         if z3.is_app(t) and t.decl().kind() == z3.Z3_OP_UNINTERPRETED:
             res.append(t.decl())
 
+
 class HornRule(object):
     def __init__(self, formula):
+        self._ctx = formula.ctx
         self._formula = formula
         self._head = None
         self._body = []
@@ -87,10 +91,11 @@ class HornRule(object):
         # this ensures that any simplifications that are done during _update() are
         # also reflected in the formula view
         self._formula = None
-        assert(self._head is not None)
+        assert (self._head is not None)
 
     def __str__(self):
         return str(self._formula)
+
     def __repr__(self):
         return repr(self._formula)
 
@@ -103,49 +108,52 @@ class HornRule(object):
     def is_simple_query(self):
         """Returns true if query is a simple.
 
-        A simple query is an application of an uninterprted predicate
+        A simple query is an application of an uninterpreted predicate
 
         """
         if not self.is_query():
             return False
 
         if self.uninterp_size() != 1:
-            return False;
+            return False
 
         predicate = self.body()[0]
 
         if predicate.num_args() > 0:
             return False
 
-        _body = self.body()[1:];
+        _body = self.body()[1:]
         if len(_body) == 0:
             return True
 
         if len(_body) == 1:
             return z3.is_true(_body[0])
 
-        _body = z3.simplify(z3.And(*_body))
+        _body = z3.simplify(z3.And(*_body, self._ctx))
         return z3.is_true(_body)
 
-    ### based on the following inference
-    ###
-    ### forall v :: (expr ==> false)
-    ###
-    ### equivalent to
-    ###
-    ### forall v:: ( expr ==> q ) && forall v :: ( q ==> false )
-    ###
+    # based on the following inference
+    #
+    # forall v :: (expr ==> false)
+    #
+    # equivalent to
+    #
+    # forall v:: ( expr ==> q ) && forall v :: ( q ==> false )
+    #
     def split_query(self):
         """Split query if it is not simple into a query and a rule"""
 
-        assert(self.is_query())
+        assert (self.is_query())
         if self.is_simple_query():
-            return (self, None)
+            return self, None
 
-        q = z3.Bool("simple!!query")
-        query = HornRule(z3.Implies(q, z3.BoolVal(False)))
-        rule = HornRule(z3.ForAll(self._bound_constants,
-                                  z3.Implies(z3.And(*self.body()), q)))
+        q = z3.Bool("simple!!query", self._ctx)
+        query = HornRule(z3.Implies(q, False))
+        if self._bound_constants:
+            rule = HornRule(z3.ForAll(self._bound_constants,
+                                      z3.Implies(z3.And(*self.body(), self._ctx), q)))
+        else:
+            rule = HornRule(z3.Implies(z3.And(*self.body(), self._ctx), q))
         return query, rule
 
     def is_fact(self):
@@ -175,11 +183,11 @@ class HornRule(object):
     def mk_formula(self):
         f = self._body
         if len(f) == 0:
-            f = z3.BoolVal(True)
+            f = z3.BoolVal(True, self._ctx)
         elif len(f) == 1:
             f = f[0]
         else:
-            f = z3.And(f)
+            f = z3.And(f, self._ctx)
         f = z3.Implies(f, self._head)
 
         if len(self._bound_constants) > 0:
@@ -188,8 +196,8 @@ class HornRule(object):
         return self._formula
 
     def mk_query(self):
-        assert(self.is_query())
-        assert(len(self.body()) > 0)
+        assert (self.is_query())
+        assert (len(self.body()) > 0)
         _body = self.body()
         if self.is_simple_query():
             return _body[0]
@@ -197,15 +205,19 @@ class HornRule(object):
         if len(_body) == 1:
             f = _body[0]
         else:
-            f = z3.And(_body)
+            f = z3.And(_body, self._ctx)
         if len(self._bound_constants) > 0:
             f = z3.Exists(self._bound_constants, f)
         return f
 
+    def get_ctx(self):
+        return self._ctx
+
+
 class HornRelation(object):
     def __init__(self, fdecl):
         self._fdecl = fdecl
-        self._sig =  []
+        self._sig = []
         self._pysmt_sig = []
         self._lemma_parser = None
 
@@ -218,12 +230,11 @@ class HornRelation(object):
             sort = self._fdecl.domain(i)
             self._sig.append(z3.Const(name, sort))
 
-
         # compute pysmt version of the signature
         env = pysmt.environment.get_env()
         mgr = env.formula_manager
-        ctx = z3.get_ctx(None)
-        converter = pyz3.Z3Converter(env, ctx)
+        converter = pyz3.Z3Converter(env, self.get_ctx())
+        # noinspection PyProtectedMember
         self._pysmt_sig = [mgr.Symbol(v.decl().name(),
                                       converter._z3_to_type(v.sort()))
                            for v in self._sig]
@@ -262,13 +273,18 @@ class HornRelation(object):
             name = self._mk_lemma_arg_name(i)
             self._lemma_parser.cache.bind(name, symbol)
 
-    def pysmt_parse_lemma(self, input):
+    def pysmt_parse_lemma(self, lemma):
         self._mk_lemma_parser()
-        tokens = Tokenizer(input, interactive = False)
+        tokens = Tokenizer(lemma, interactive=False)
         return self._lemma_parser.get_expression(tokens)
 
+    def get_ctx(self):
+        return self._fdecl.ctx
+
+
 class HornClauseDb(object):
-    def __init__(self, name = 'horn', simplify_queries = True):
+    def __init__(self, name='horn', simplify_queries=True, ctx=z3.main_ctx()):
+        self._ctx = ctx
         self._name = name
         self._rules = []
         self._queries = []
@@ -280,6 +296,7 @@ class HornClauseDb(object):
         self._simple_query = simplify_queries
 
     def add_rule(self, horn_rule):
+        assert self._ctx == horn_rule.get_ctx()
         self._sealed = False
         if horn_rule.is_query():
             if self._simple_query and not horn_rule.is_simple_query():
@@ -297,10 +314,13 @@ class HornClauseDb(object):
 
     def has_rel(self, rel_name):
         return rel_name in self._rels.keys()
+
     def get_rel(self, rel_name):
         return self._rels[rel_name]
+
     def get_rules(self):
         return self._rules
+
     def get_queries(self):
         return self._queries
 
@@ -312,7 +332,7 @@ class HornClauseDb(object):
         for r in self._rules:
             rels.extend(r.used_rels())
         for q in self._queries:
-            rels.extend(r.used_rels())
+            rels.extend(q.used_rels())
         self._rels_set = frozenset(rels)
         self._sealed = True
 
@@ -330,16 +350,17 @@ class HornClauseDb(object):
         return out.getvalue()
 
     def load_from_fp(self, fp, queries):
+        assert fp.ctx == self._ctx
         self._fp = fp
         if len(queries) > 0:
             for r in fp.get_rules():
                 rule = HornRule(r)
                 self.add_rule(rule)
             for q in queries:
-                rule = HornRule(z3.Implies(q, z3.BoolVal(False)))
+                rule = HornRule(z3.Implies(q, False))
                 self.add_rule(rule)
         else:
-            # fixedpoit object is not properly loaded, ignore it
+            # fixedpoint object is not properly loaded, ignore it
             self._fp = None
             for a in fp.get_assertions():
                 rule = HornRule(a)
@@ -348,13 +369,16 @@ class HornClauseDb(object):
 
     def has_fixedpoint(self):
         return self._fp is not None
+
     def get_fixedpoint(self):
         return self._fp
 
-    def mk_fixedpoint(self, fp = None):
+    def mk_fixedpoint(self, fp=None):
         if fp is None:
-            self._fp = z3.Fixedpoint()
+            self._fp = z3.Fixedpoint(ctx=self._ctx)
             fp = self._fp
+
+        assert fp.ctx == self._ctx
 
         for rel in self._rels_set:
             fp.register_relation(rel)
@@ -365,6 +389,10 @@ class HornClauseDb(object):
                 fp.add_rule(r.mk_formula())
 
         return fp
+
+    def get_ctx(self):
+        return self._ctx
+
 
 class FolModel(object):
     def __init__(self):
@@ -390,11 +418,12 @@ class FolModel(object):
         body = z3.substitute_vars(body, *reversed(term.children()))
         return body
 
-
     def __str__(self):
         return str(self._fn_interps)
+
     def __repr__(self):
         return repr(self._fn_interps)
+
 
 def load_horn_db_from_file(fname):
     fp = z3.Fixedpoint()
@@ -403,18 +432,23 @@ def load_horn_db_from_file(fname):
     db.load_from_fp(fp, queries)
     return db
 
+
+# noinspection PyProtectedMember
 def main():
     db = load_horn_db_from_file(sys.argv[1])
     print(db)
     print(db.get_rels())
     print(db._rels)
     rel = db.get_rel('main@_bb723')
-    lemma_stream = io.StringIO('(=> (< main@_bb723_0_n 1) (>= (+ main@_bb723_4_n main@_bb723_5_n) 0))')
+    lemma_stream = io.StringIO(
+        '(=> (< main@_bb723_0_n 1) (>= (+ main@_bb723_4_n main@_bb723_5_n) 0))')
     lemma = rel.pysmt_parse_lemma(lemma_stream)
     print(lemma)
     print(lemma._content._asdict())
-    #import json
-    #json.dumps(lemma._content._asdict())
+    # import json
+    # json.dumps(lemma._content._asdict())
     return 0
+
+
 if __name__ == '__main__':
     sys.exit(main())
