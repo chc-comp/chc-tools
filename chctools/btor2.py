@@ -5,6 +5,7 @@ from typing import Optional, List, TextIO, Union, Dict, Tuple, Callable, Any
 import pysmt.environment  # type: ignore
 import z3  # type: ignore
 
+from .chcpp import pp_chc_as_smt  # type: ignore
 from .horndb import HornClauseDb, HornRule  # type: ignore
 
 
@@ -1081,6 +1082,7 @@ def bmc(init: z3.ExprRef, tr: z3.ExprRef, bad: z3.ExprRef, n: int, pre_vars: Lis
     vars1: List[z3.ExprRef] = pre_vars.copy()
     vars2: List[z3.ExprRef] = post_vars.copy()
     ips: List[z3.ExprRef] = inputs.copy()
+    all_vars: List[z3.ExprRef] = pre_vars + post_vars + inputs
 
     for i in range(n - 1):
         new_vars: List[z3.ExprRef] = []
@@ -1095,9 +1097,13 @@ def bmc(init: z3.ExprRef, tr: z3.ExprRef, bad: z3.ExprRef, n: int, pre_vars: Lis
         tr = z3.substitute(tr, *zip(vars2, new_vars), *zip(vars1, vars2), *zip(ips, new_ips))
         vars1, vars2, ips = vars2, new_vars, new_ips
         z3_exprs.append(tr)
+        all_vars += new_vars + new_ips
 
-    z3_exprs.append(z3.substitute(bad, *zip(pre_vars, vars2)))
-    return z3.And(z3_exprs, init.ctx)
+    z3_expr = z3.And(z3_exprs + [z3.substitute(bad, *zip(pre_vars, vars2))], init.ctx)
+
+    if all_vars:
+        return z3.ForAll(all_vars, z3_expr)
+    return z3_expr
 
 
 class Btor2Parser:
@@ -1491,27 +1497,40 @@ class Btor2Parser:
         return ts
 
 
-def btor2chc(input_file: TextIO, output_file: TextIO, simplify: bool = True,
-             recursion_limit: int = 10000, engine: str = 'spacer') -> None:
-    from .chcpp import pp_chc_as_smt  # type: ignore
-
+def btor2ts(input_file: TextIO, simplify: bool = True, recursion_limit: int = 10000) -> Ts:
     if recursion_limit > 0:
         sys.setrecursionlimit(recursion_limit)
 
     btor2_parser: Btor2Parser = Btor2Parser(z3.Context())
     btor2_parser.parse(input_file)
+
     ts: Ts = btor2_parser.to_ts()
     ts.reduce_constraints()
     ts.reduce_bads()
     if simplify:
         ts.simplify()
 
-    init: z3.ExprRef
-    tr: z3.ExprRef
-    bad: z3.ExprRef
-    inv: z3.FuncDeclRef
-    init, tr, bad, inv = generate_vc(ts)
-    db: HornClauseDb = generate_horn_clause_db(init, tr, bad)
+    return ts
+
+
+def btor2chc(input_file: TextIO, output_file: TextIO, simplify: bool = True,
+             recursion_limit: int = 10000, engine: str = 'spacer') -> None:
+    ts: Ts = btor2ts(input_file, simplify, recursion_limit)
+    db: HornClauseDb = generate_horn_clause_db(*generate_vc(ts)[:-1])
+
+    if engine:
+        output_file.write('(set-option :fp.engine {:s})\n'.format(engine))
+
+    pp_chc_as_smt(db, output_file)
+
+
+def btor2bmc(input_file: TextIO, output_file: TextIO, n: int, simplify: bool = True,
+             recursion_limit: int = 10000, engine: str = 'spacer') -> None:
+    ts: Ts = btor2ts(input_file, simplify, recursion_limit)
+    db: HornClauseDb = HornClauseDb(ctx=ts.ctx)
+    b: z3.ExprRef = bmc(ts.init, ts.tr, ts.bad(), n, ts.pre_vars, ts.post_vars, ts.inputs)
+    db.add_rule(HornRule(z3.Implies(b, False)))
+    db.seal()
 
     if engine:
         output_file.write('(set-option :fp.engine {:s})\n'.format(engine))
