@@ -38,7 +38,7 @@ class ModelValidator(object):
     def __init__(self, db, model):
         self._db = db
         self._model = model
-        self._solver = z3.Solver()
+        self._solver = z3.Solver(ctx=db.get_ctx())
 
     def _validate_rule(self, r):
         with pushed_solver(self._solver) as s:

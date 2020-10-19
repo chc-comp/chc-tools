@@ -1,8 +1,11 @@
+import sys
 from abc import ABC, abstractmethod
 from typing import Optional, List, TextIO, Union, Dict, Tuple, Callable, Any
 
-# noinspection PyPackageRequirements
+import pysmt.environment  # type: ignore
 import z3  # type: ignore
+
+from .chcpp import pp_chc_as_smt  # type: ignore
 from .horndb import HornClauseDb, HornRule  # type: ignore
 
 
@@ -10,18 +13,18 @@ def to_z3_bitvec(z3_expr: Union[z3.BitVecRef, z3.BoolRef]) -> z3.BitVecRef:
     if isinstance(z3_expr, z3.BitVecRef):
         return z3_expr
     elif z3.is_true(z3_expr):
-        return z3.BitVecVal(1, 1)
+        return z3.BitVecVal(1, 1, z3_expr.ctx)
     elif z3.is_false(z3_expr):
-        return z3.BitVecVal(0, 1)
-    return z3.If(z3_expr, z3.BitVecVal(1, 1), z3.BitVecVal(0, 1))
+        return z3.BitVecVal(0, 1, z3_expr.ctx)
+    return z3.If(z3_expr, z3.BitVecVal(1, 1, z3_expr.ctx), z3.BitVecVal(0, 1, z3_expr.ctx))
 
 
 def to_z3_bool(z3_expr: Union[z3.BitVecRef, z3.BoolRef]) -> z3.BoolRef:
     if isinstance(z3_expr, z3.BoolRef):
         return z3_expr
     elif isinstance(z3_expr, z3.BitVecNumRef):
-        return z3.BoolVal(z3_expr)
-    return z3_expr == z3.BitVecVal(1, 1)
+        return z3.BoolVal(z3_expr, z3_expr.ctx)
+    return z3_expr == z3.BitVecVal(1, 1, z3_expr.ctx)
 
 
 def try_bitvec_to_bool(z3_expr: z3.ExprRef) -> z3.ExprRef:
@@ -39,17 +42,18 @@ def to_z3_eq(z3_expr1: z3.ExprRef, z3_expr2: z3.ExprRef) -> z3.BoolRef:
 # noinspection PyProtectedMember
 def call_z3_mk_bv(z3_mk_bv: Callable[[Any, Any, Any], Any],
                   z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BitVecRef:
-    # noinspection PyPackageRequirements
     from z3.z3 import _coerce_exprs  # type: ignore
     a, b = _coerce_exprs(z3_bitvec1, z3_bitvec2)
     return z3.BitVecRef(z3_mk_bv(z3_bitvec1.ctx_ref(), a.as_ast(), b.as_ast()), z3_bitvec1.ctx)
 
 
 class Z3ExprMemo:
+    ctx: z3.Context
     z3_bitvec_or_bool_m: Dict[int, Union[z3.BitVecRef, z3.BoolRef]]
     z3_array_m: Dict[int, z3.ArrayRef]
 
-    def __init__(self):
+    def __init__(self, ctx: z3.Context = z3.Context()):
+        self.ctx = ctx
         self.z3_bitvec_or_bool_m = {}
         self.z3_array_m = {}
 
@@ -69,7 +73,7 @@ class Sort(Node):
         self.sid = sid
 
     @abstractmethod
-    def to_z3_sort(self) -> z3.SortRef:
+    def to_z3_sort(self, ctx: z3.Context = z3.main_ctx()) -> z3.SortRef:
         raise NotImplementedError
 
 
@@ -80,10 +84,11 @@ class BitvecSort(Sort):
         super().__init__(sid, symbol)
         self.width = width
 
-    def to_z3_sort(self) -> Union[z3.BitVecSortRef, z3.BoolSortRef]:
+    def to_z3_sort(self, ctx: z3.Context = z3.main_ctx()) -> Union[z3.BitVecSortRef,
+                                                                   z3.BoolSortRef]:
         if self.width == 1:
-            return z3.BoolSort()
-        return z3.BitVecSort(self.width)
+            return z3.BoolSort(ctx)
+        return z3.BitVecSort(self.width, ctx)
 
 
 class ArraySort(Sort):
@@ -95,8 +100,8 @@ class ArraySort(Sort):
         self.index_sort = index_sort
         self.element_sort = element_sort
 
-    def to_z3_sort(self) -> z3.ArraySortRef:
-        return z3.ArraySort(self.index_sort.to_z3_sort(), self.element_sort.to_z3_sort())
+    def to_z3_sort(self, ctx: z3.Context = z3.main_ctx()) -> z3.ArraySortRef:
+        return z3.ArraySort(self.index_sort.to_z3_sort(ctx), self.element_sort.to_z3_sort(ctx))
 
 
 class Expr(Node):
@@ -122,9 +127,9 @@ class Bitvec(Expr, ABC):
     def to_z3_expr(self, m: Z3ExprMemo) -> Union[z3.BitVecRef, z3.BoolRef]:
         if self.nid in m.z3_bitvec_or_bool_m:
             return m.z3_bitvec_or_bool_m[self.nid]
-        z3_bitvec_or_bool: Union[z3.BitVecRef, z3.BoolRef] = self.to_new_z3_expr(m)
-        m.z3_bitvec_or_bool_m[self.nid] = z3_bitvec_or_bool
-        return z3_bitvec_or_bool
+        z3_expr: Union[z3.BitVecRef, z3.BoolRef] = self.to_new_z3_expr(m)
+        m.z3_bitvec_or_bool_m[self.nid] = z3_expr
+        return z3_expr
 
     @abstractmethod
     def to_new_z3_expr(self, m: Z3ExprMemo) -> Union[z3.BitVecRef, z3.BoolRef]:
@@ -146,9 +151,9 @@ class Array(Expr, ABC):
     def to_z3_expr(self, m: Z3ExprMemo) -> z3.ArrayRef:
         if self.nid in m.z3_array_m:
             return m.z3_array_m[self.nid]
-        z3_array: z3.ArrayRef = self.to_new_z3_expr(m)
-        m.z3_array_m[self.nid] = z3_array
-        return z3_array
+        z3_expr: z3.ArrayRef = self.to_new_z3_expr(m)
+        m.z3_array_m[self.nid] = z3_expr
+        return z3_expr
 
     @abstractmethod
     def to_new_z3_expr(self, m: Z3ExprMemo) -> z3.ArrayRef:
@@ -188,8 +193,8 @@ class Constant(Bitvec):
 
     def to_new_z3_expr(self, m: Z3ExprMemo) -> Union[z3.BitVecRef, z3.BoolRef]:
         if self.sort.width == 1:
-            return z3.BoolVal(self.value)
-        return z3.BitVecVal(self.value, self.sort.width)
+            return z3.BoolVal(self.value, m.ctx)
+        return z3.BitVecVal(self.value, self.sort.width, m.ctx)
 
 
 class One(Constant):
@@ -409,7 +414,8 @@ class Iff(BitvecBinaryOp):
 
 class Implies(BitvecBinaryOp):
     def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
-        return z3.Or(z3_bitvec1 == z3.BitVecRef(0, 1), z3_bitvec2 == z3.BitVecRef(1, 1))
+        return z3.Or(z3_bitvec1 == z3.BitVecVal(0, 1, z3_bitvec1.ctx),
+                     z3_bitvec2 == z3.BitVecVal(1, 1, z3_bitvec1.ctx), z3_bitvec1.ctx)
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
         return z3.Implies(z3_bool1, z3_bool2)
@@ -445,7 +451,7 @@ class Sgt(BitvecBinaryOp):
         return z3_bitvec1 > z3_bitvec2
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.And(z3.Not(z3_bool1), z3_bool2)
+        return z3.And(z3.Not(z3_bool1), z3_bool2, z3_bool1.ctx)
 
 
 class Ugt(BitvecBinaryOp):
@@ -453,7 +459,7 @@ class Ugt(BitvecBinaryOp):
         return z3.UGT(z3_bitvec1, z3_bitvec2)
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.And(z3_bool1, z3.Not(z3_bool2))
+        return z3.And(z3_bool1, z3.Not(z3_bool2), z3_bool1.ctx)
 
 
 class Sgte(BitvecBinaryOp):
@@ -477,7 +483,7 @@ class Slt(BitvecBinaryOp):
         return z3_bitvec1 < z3_bitvec2
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.And(z3_bool1, z3.Not(z3_bool2))
+        return z3.And(z3_bool1, z3.Not(z3_bool2), z3_bool1.ctx)
 
 
 class Ult(BitvecBinaryOp):
@@ -485,7 +491,7 @@ class Ult(BitvecBinaryOp):
         return z3.ULT(z3_bitvec1, z3_bitvec2)
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.And(z3.Not(z3_bool1), z3_bool2)
+        return z3.And(z3.Not(z3_bool1), z3_bool2, z3_bool1.ctx)
 
 
 class Slte(BitvecBinaryOp):
@@ -509,7 +515,7 @@ class And(BitvecBinaryOp):
         return z3_bitvec1 & z3_bitvec2
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.And(z3_bool1, z3_bool2)
+        return z3.And(z3_bool1, z3_bool2, z3_bool1.ctx)
 
 
 class Nand(BitvecBinaryOp):
@@ -517,7 +523,7 @@ class Nand(BitvecBinaryOp):
         return call_z3_mk_bv(z3.Z3_mk_bvnand, z3_bitvec1, z3_bitvec2)
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.Not(z3.And(z3_bool1, z3_bool2))
+        return z3.Not(z3.And(z3_bool1, z3_bool2, z3_bool1.ctx))
 
 
 class Nor(BitvecBinaryOp):
@@ -525,7 +531,7 @@ class Nor(BitvecBinaryOp):
         return call_z3_mk_bv(z3.Z3_mk_bvnor, z3_bitvec1, z3_bitvec2)
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.Not(z3.Or(z3_bool1, z3_bool2))
+        return z3.Not(z3.Or(z3_bool1, z3_bool2, z3_bool1.ctx))
 
 
 class Or(BitvecBinaryOp):
@@ -533,7 +539,7 @@ class Or(BitvecBinaryOp):
         return z3_bitvec1 | z3_bitvec2
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.Or(z3_bool1, z3_bool2)
+        return z3.Or(z3_bool1, z3_bool2, z3_bool1.ctx)
 
 
 class Xnor(BitvecBinaryOp):
@@ -557,7 +563,7 @@ class Sll(BitvecBinaryOp):
         return z3_bitvec1 << z3_bitvec2
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.And(z3_bool1, z3.Not(z3_bool2))
+        return z3.And(z3_bool1, z3.Not(z3_bool2), z3_bool1.ctx)
 
 
 class Sra(BitvecBinaryOp):
@@ -573,7 +579,7 @@ class Srl(BitvecBinaryOp):
         return z3.LShR(z3_bitvec1, z3_bitvec2)
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.And(z3_bool1, z3.Not(z3_bool2))
+        return z3.And(z3_bool1, z3.Not(z3_bool2), z3_bool1.ctx)
 
 
 class Rol(BitvecBinaryOp):
@@ -605,7 +611,7 @@ class Mul(BitvecBinaryOp):
         return z3_bitvec1 * z3_bitvec2
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.And(z3_bool1, z3_bool2)
+        return z3.And(z3_bool1, z3_bool2, z3_bool1.ctx)
 
 
 class Sdiv(BitvecBinaryOp):
@@ -629,7 +635,7 @@ class Smod(BitvecBinaryOp):
         return z3_bitvec1 % z3_bitvec2
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.And(z3_bool1, z3.Not(z3_bool2))
+        return z3.And(z3_bool1, z3.Not(z3_bool2), z3_bool1.ctx)
 
 
 class Srem(BitvecBinaryOp):
@@ -637,7 +643,7 @@ class Srem(BitvecBinaryOp):
         return z3.SRem(z3_bitvec1, z3_bitvec2)
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.And(z3_bool1, z3.Not(z3_bool2))
+        return z3.And(z3_bool1, z3.Not(z3_bool2), z3_bool1.ctx)
 
 
 class Urem(BitvecBinaryOp):
@@ -645,7 +651,7 @@ class Urem(BitvecBinaryOp):
         return z3.URem(z3_bitvec1, z3_bitvec2)
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.And(z3_bool1, z3.Not(z3_bool2))
+        return z3.And(z3_bool1, z3.Not(z3_bool2), z3_bool1.ctx)
 
 
 class Sub(BitvecBinaryOp):
@@ -658,11 +664,11 @@ class Sub(BitvecBinaryOp):
 
 class Saddo(BitvecBinaryOp):
     def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
-        return z3.Not(z3.Or((z3.BVAddNoOverflow(z3_bitvec1, z3_bitvec2, True),
-                             z3.BVAddNoUnderflow(z3_bitvec1, z3_bitvec2))))
+        return z3.Not(z3.Or(z3.BVAddNoOverflow(z3_bitvec1, z3_bitvec2, True),
+                            z3.BVAddNoUnderflow(z3_bitvec1, z3_bitvec2), z3_bitvec1.ctx))
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.BoolVal(False)
+        return z3.BoolVal(False, z3_bool1.ctx)
 
 
 class Uaddo(BitvecBinaryOp):
@@ -670,7 +676,7 @@ class Uaddo(BitvecBinaryOp):
         return z3.Not(z3.BVAddNoOverflow(z3_bitvec1, z3_bitvec2, False))
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.And(z3_bool1, z3_bool2)
+        return z3.And(z3_bool1, z3_bool2, z3_bool1.ctx)
 
 
 class Sdivo(BitvecBinaryOp):
@@ -678,24 +684,24 @@ class Sdivo(BitvecBinaryOp):
         return z3.Not(z3.BVSDivNoOverflow(z3_bitvec1, z3_bitvec2))
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.And(z3_bool1, z3_bool2)
+        return z3.And(z3_bool1, z3_bool2, z3_bool1.ctx)
 
 
 class Udivo(BitvecBinaryOp):
     def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
-        return z3.BoolVal(False)
+        return z3.BoolVal(False, z3_bitvec1.ctx)
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.BoolVal(False)
+        return z3.BoolVal(False, z3_bool1.ctx)
 
 
 class Smulo(BitvecBinaryOp):
     def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
-        return z3.Not(z3.Or((z3.BVMulNoOverflow(z3_bitvec1, z3_bitvec2, True),
-                             z3.BVMulNoUnderflow(z3_bitvec1, z3_bitvec2))))
+        return z3.Not(z3.Or(z3.BVMulNoOverflow(z3_bitvec1, z3_bitvec2, True),
+                            z3.BVMulNoUnderflow(z3_bitvec1, z3_bitvec2), z3_bitvec1.ctx))
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.BoolVal(False)
+        return z3.BoolVal(False, z3_bool1.ctx)
 
 
 class Umulo(BitvecBinaryOp):
@@ -703,16 +709,16 @@ class Umulo(BitvecBinaryOp):
         return z3.Not(z3.BVMulNoOverflow(z3_bitvec1, z3_bitvec2, False))
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.BoolVal(False)
+        return z3.BoolVal(False, z3_bool1.ctx)
 
 
 class Ssubo(BitvecBinaryOp):
     def z3_bitvec_op(self, z3_bitvec1: z3.BitVecRef, z3_bitvec2: z3.BitVecRef) -> z3.BoolRef:
-        return z3.Not(z3.Or((z3.BVSubNoUnderflow(z3_bitvec1, z3_bitvec2, True),
-                             z3.BVSubNoOverflow(z3_bitvec1, z3_bitvec2))))
+        return z3.Not(z3.Or(z3.BVSubNoUnderflow(z3_bitvec1, z3_bitvec2, True),
+                            z3.BVSubNoOverflow(z3_bitvec1, z3_bitvec2), z3_bitvec1.ctx))
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.BoolVal(False)
+        return z3.BoolVal(False, z3_bool1.ctx)
 
 
 class Usubo(BitvecBinaryOp):
@@ -720,7 +726,7 @@ class Usubo(BitvecBinaryOp):
         return z3.Not(z3.BVSubNoUnderflow(z3_bitvec1, z3_bitvec2, False))
 
     def z3_bool_op(self, z3_bool1: z3.BoolRef, z3_bool2: z3.BoolRef) -> z3.BoolRef:
-        return z3.And(z3_bool1, z3.Not(z3_bool2))
+        return z3.And(z3_bool1, z3.Not(z3_bool2), z3_bool1.ctx)
 
 
 class Concat(BitvecBinaryOp):
@@ -948,48 +954,34 @@ class Justice(Node):
 
 
 class Ts:
+    ctx: z3.Context
     pre_vars: List[z3.ExprRef]
     post_vars: List[z3.ExprRef]
     inputs: List[z3.ExprRef]
-    init: z3.ExprRef
-    tr: z3.ExprRef
-    bads: List[z3.ExprRef]
+    init: z3.BoolRef
+    tr: z3.BoolRef
+    bads: List[z3.BoolRef]
     constraints: List[z3.ExprRef]
 
-    def __init__(self):
+    def __init__(self, ctx: z3.Context = z3.main_ctx()):
+        self.ctx = ctx
         self.pre_vars = []
         self.post_vars = []
         self.inputs = []
-        self.init = z3.BoolVal(True)
-        self.tr = z3.BoolVal(True)
+        self.init = z3.BoolVal(True, ctx)
+        self.tr = z3.BoolVal(True, ctx)
         self.bads = []
         self.constraints = []
 
-    def put_bitvec_or_bool_var(self, sort: Union[z3.BitVecSortRef, z3.BoolSortRef],
-                               prefix: str = "") -> Union[Tuple[z3.BitVecRef, z3.BitVecRef],
-                                                          Tuple[z3.BoolRef, z3.BoolRef]]:
-        pre_z3_expr: Union[z3.BitVecRef, z3.BoolRef] = z3.FreshConst(sort, "vi" + prefix)
-        post_z3_expr: Union[z3.BitVecRef, z3.BoolRef] = z3.FreshConst(sort, "vo" + prefix)
+    def put_var(self, sort: z3.SortRef, prefix: str = "") -> Tuple[z3.ExprRef, z3.ExprRef]:
+        pre_z3_expr: z3.ExprRef = z3.FreshConst(sort, "vi" + prefix)
+        post_z3_expr: z3.ExprRef = z3.FreshConst(sort, "vo" + prefix)
         self.pre_vars.append(pre_z3_expr)
         self.post_vars.append(post_z3_expr)
         return pre_z3_expr, post_z3_expr
 
-    def put_array_var(self, sort: z3.ArraySortRef,
-                      prefix: str = "") -> Tuple[z3.ArrayRef, z3.ArrayRef]:
-        pre_z3_expr: z3.ArrayRef = z3.FreshConst(sort, "vi" + prefix)
-        post_z3_expr: z3.ArrayRef = z3.FreshConst(sort, "vo" + prefix)
-        self.pre_vars.append(pre_z3_expr)
-        self.post_vars.append(post_z3_expr)
-        return pre_z3_expr, post_z3_expr
-
-    def put_bitvec_or_bool_input(self, sort: Union[z3.BitVecSortRef, z3.BoolSortRef],
-                                 prefix: str = "") -> Union[z3.BitVecRef, z3.BoolRef]:
-        z3_expr: Union[z3.BitVecRef, z3.BoolRef] = z3.FreshConst(sort, "i" + prefix)
-        self.inputs.append(z3_expr)
-        return z3_expr
-
-    def put_array_input(self, sort: z3.ArraySortRef, prefix: str = "") -> z3.ArrayRef:
-        z3_expr: z3.ArrayRef = z3.FreshConst(sort, "i" + prefix)
+    def put_input(self, sort: z3.SortRef, prefix: str = "") -> z3.ExprRef:
+        z3_expr: z3.ExprRef = z3.FreshConst(sort, "i" + prefix)
         self.inputs.append(z3_expr)
         return z3_expr
 
@@ -997,7 +989,7 @@ class Ts:
         return [v.sort() for v in self.post_vars]
 
     def inv(self) -> z3.FuncDeclRef:
-        return z3.Function("Inv", *(self.sig() + [z3.BoolSort()]))
+        return z3.Function("Inv", *self.sig(), z3.BoolSort(self.ctx))
 
     def vars(self) -> List[z3.ExprRef]:
         return self.pre_vars + self.post_vars
@@ -1010,11 +1002,11 @@ class Ts:
         if self.bads:
             return self.bads[0]
         else:
-            return z3.Bool(False)
+            return z3.Bool(False, self.ctx)
 
     def reduce_bads(self) -> None:
         if len(self.bads) > 1:
-            self.bads = [z3.Or(self.bads)]
+            self.bads = [z3.Or(self.bads, self.ctx)]
 
     def reduce_constraints(self, method: int = 0) -> None:
         if self.constraints:
@@ -1023,18 +1015,22 @@ class Ts:
             # (init(v), tr(v, in, v'), bad(v)) with constraint c(v, in) is equiv to
             # init(v), tr(v, in, v') and c(v, in), bad(v)
             if method == 0:
-                self.init = z3.And(self.init, *self.constraints)
-                self.tr = z3.And(self.tr, *self.constraints)
-                self.bads = [z3.And(self.bad(), *self.constraints)]
+                self.init = z3.And(self.init, *self.constraints, self.ctx)
+                self.tr = z3.And(self.tr, *self.constraints, self.ctx)
+                self.bads = [z3.And(self.bad(), *self.constraints, self.ctx)]
             elif method == 1:
-                self.tr = z3.And(self.tr, *self.constraints)
+                self.tr = z3.And(self.tr, *self.constraints, self.ctx)
             else:
                 raise NotImplementedError
             self.constraints = []
 
+    def simplify(self) -> None:
+        self.init = z3.simplify(self.init)
+        self.tr = z3.simplify(self.tr)
+        self.bads = [z3.simplify(bad) for bad in self.bads]
 
-def generate_vc(ts: Ts, simplify: bool = True) -> Tuple[z3.ExprRef, z3.ExprRef,
-                                                        z3.ExprRef, z3.FuncDeclRef]:
+
+def generate_vc(ts: Ts) -> Tuple[z3.ExprRef, z3.ExprRef, z3.ExprRef, z3.FuncDeclRef]:
     if len(ts.bads) > 1 or ts.constraints:
         raise NotImplementedError
     vars_and_inputs: List[z3.ExprRef] = ts.vars_and_inputs()
@@ -1043,18 +1039,13 @@ def generate_vc(ts: Ts, simplify: bool = True) -> Tuple[z3.ExprRef, z3.ExprRef,
     inv_post: z3.ExprRef = inv(*ts.post_vars)
 
     init: z3.ExprRef = z3.Implies(ts.init, inv_pre)
-    tr: z3.ExprRef = z3.Implies(z3.And(inv_pre, ts.tr), inv_post)
-    bad: z3.ExprRef = z3.Implies(z3.And(inv_pre, ts.bad()), False)
+    tr: z3.ExprRef = z3.Implies(z3.And(inv_pre, ts.tr, ts.ctx), inv_post)
+    bad: z3.ExprRef = z3.Implies(z3.And(inv_pre, ts.bad(), ts.ctx), False)
 
     if vars_and_inputs:
         init = z3.ForAll(vars_and_inputs, init)
         tr = z3.ForAll(vars_and_inputs, tr)
         bad = z3.ForAll(vars_and_inputs, bad)
-
-    if simplify:
-        init = z3.simplify(init)
-        tr = z3.simplify(tr)
-        bad = z3.simplify(bad)
 
     return init, tr, bad, inv
 
@@ -1071,8 +1062,12 @@ def generate_chc_str(init: z3.ExprRef, tr: z3.ExprRef, bad: z3.ExprRef,
             "(exit)\n"]
 
 
-def generate_horn_clause_db(init: z3.ExprRef, tr: z3.ExprRef, bad: z3.ExprRef) -> HornClauseDb:
-    db: HornClauseDb = HornClauseDb()
+def generate_horn_clause_db(init: z3.ExprRef, tr: z3.ExprRef, bad: z3.ExprRef,
+                            reset_pysmt_env: bool = True) -> HornClauseDb:
+    if reset_pysmt_env:
+        pysmt.environment.reset_env()
+
+    db: HornClauseDb = HornClauseDb(ctx=init.ctx)
     db.add_rule(HornRule(init))
     db.add_rule(HornRule(tr))
     db.add_rule(HornRule(bad))
@@ -1081,12 +1076,13 @@ def generate_horn_clause_db(init: z3.ExprRef, tr: z3.ExprRef, bad: z3.ExprRef) -
 
 
 def bmc(init: z3.ExprRef, tr: z3.ExprRef, bad: z3.ExprRef, n: int, pre_vars: List[z3.ExprRef],
-        post_vars: List[z3.ExprRef], inputs: List[z3.ExprRef]):
+        post_vars: List[z3.ExprRef], inputs: List[z3.ExprRef]) -> z3.ExprRef:
     z3_exprs: List[z3.ExprRef] = [init, tr]
 
     vars1: List[z3.ExprRef] = pre_vars.copy()
     vars2: List[z3.ExprRef] = post_vars.copy()
     ips: List[z3.ExprRef] = inputs.copy()
+    all_vars: List[z3.ExprRef] = pre_vars + post_vars + inputs
 
     for i in range(n - 1):
         new_vars: List[z3.ExprRef] = []
@@ -1101,12 +1097,17 @@ def bmc(init: z3.ExprRef, tr: z3.ExprRef, bad: z3.ExprRef, n: int, pre_vars: Lis
         tr = z3.substitute(tr, *zip(vars2, new_vars), *zip(vars1, vars2), *zip(ips, new_ips))
         vars1, vars2, ips = vars2, new_vars, new_ips
         z3_exprs.append(tr)
+        all_vars += new_vars + new_ips
 
-    z3_exprs.append(z3.substitute(bad, *zip(pre_vars, vars2)))
-    return z3.And(z3_exprs)
+    z3_expr = z3.And(z3_exprs + [z3.substitute(bad, *zip(pre_vars, vars2))], init.ctx)
+
+    if all_vars:
+        return z3.ForAll(all_vars, z3_expr)
+    return z3_expr
 
 
 class Btor2Parser:
+    ctx: z3.Context
     bitvec_sort_table: Dict[int, BitvecSort]
     array_sort_table: Dict[int, ArraySort]
     bitvec_state_table: Dict[int, BitvecState]
@@ -1121,7 +1122,8 @@ class Btor2Parser:
     output_list: List[Output]
     justice_list: List[Justice]
 
-    def __init__(self):
+    def __init__(self, ctx: z3.Context = z3.main_ctx()):
+        self.ctx = ctx
         self.bitvec_sort_table = {}
         self.bitvec_state_table = {}
         self.bitvec_input_table = {}
@@ -1168,7 +1170,7 @@ class Btor2Parser:
     def get_array(self, n: Union[int, str]) -> Array:
         return self.array_table[int(n)]
 
-    def parse(self, source: TextIO):
+    def parse(self, source: TextIO) -> None:
         for line in source:
             line_left: str
             sep: str
@@ -1428,39 +1430,41 @@ class Btor2Parser:
                                                 self.get_bitvec(tokens[4]))
 
     def to_ts(self) -> Ts:
-        ts: Ts = Ts()
+        ts: Ts = Ts(self.ctx)
 
         nid: int
         bitvec_input: BitvecInput
         bitvec_state: BitvecState
         array_input: ArrayInput
         array_state: ArrayState
-        bad: Bad
-        constraint: Constraint
-        z3_expr1: z3.ExprRef
-        z3_expr2: z3.ExprRef
+        z3_expr: z3.ExprRef
 
-        m: Z3ExprMemo = Z3ExprMemo()
-        m_post: Z3ExprMemo = Z3ExprMemo()
-        z3_inits: List[z3.ExprRef] = []
-        # noinspection SpellCheckingInspection
-        z3_nexts: List[z3.ExprRef] = []
+        m: Z3ExprMemo = Z3ExprMemo(self.ctx)
+        m_post: Z3ExprMemo = Z3ExprMemo(self.ctx)
+        z3_inits: List[z3.BoolRef] = []
+        z3_nexts: List[z3.BoolRef] = []
 
         for nid, bitvec_input in self.bitvec_input_table.items():
-            m.z3_bitvec_or_bool_m[nid] = ts.put_bitvec_or_bool_input(bitvec_input.sort.to_z3_sort(),
-                                                                     bitvec_input.symbol)
+            z3_expr = ts.put_input(bitvec_input.sort.to_z3_sort(self.ctx), bitvec_input.symbol)
+            if isinstance(z3_expr, z3.BitVecRef) or isinstance(z3_expr, z3.BoolRef):
+                m.z3_bitvec_or_bool_m[nid] = z3_expr
+            else:
+                raise ValueError
 
         for nid, array_input in self.array_input_table.items():
-            m.z3_array_m[nid] = ts.put_array_input(array_input.sort.to_z3_sort(),
-                                                   array_input.symbol)
+            z3_expr = ts.put_input(array_input.sort.to_z3_sort(self.ctx), array_input.symbol)
+            if isinstance(z3_expr, z3.ArrayRef):
+                m.z3_array_m[nid] = z3_expr
+            else:
+                raise ValueError
 
         for nid, bitvec_state in self.bitvec_state_table.items():
             (m.z3_bitvec_or_bool_m[nid], m_post.z3_bitvec_or_bool_m[nid]) = \
-                ts.put_bitvec_or_bool_var(bitvec_state.sort.to_z3_sort(), bitvec_state.symbol)
+                ts.put_var(bitvec_state.sort.to_z3_sort(self.ctx), bitvec_state.symbol)
 
         for nid, array_state in self.array_state_table.items():
             (m.z3_array_m[nid], m_post.z3_array_m[nid]) = \
-                ts.put_array_var(array_state.sort.to_z3_sort(), array_state.symbol)
+                ts.put_var(array_state.sort.to_z3_sort(self.ctx), array_state.symbol)
 
         # noinspection DuplicatedCode
         for nid, bitvec_state in self.bitvec_state_table.items():
@@ -1476,7 +1480,7 @@ class Btor2Parser:
             if array_state.init:
                 if array_state.sort.element_sort == array_state.init.sort:
                     z3_inits.append(to_z3_eq(array_state.to_z3_expr(m),
-                                             z3.K(array_state.sort.index_sort.to_z3_sort(),
+                                             z3.K(array_state.sort.index_sort.to_z3_sort(self.ctx),
                                                   try_bitvec_to_bool(
                                                       array_state.init.to_z3_expr(m)))))
                 else:
@@ -1486,48 +1490,71 @@ class Btor2Parser:
                 z3_nexts.append(to_z3_eq(array_state.to_z3_expr(m_post),
                                          array_state.next.to_z3_expr(m)))
 
-        ts.init = z3.And(z3_inits)
-        ts.tr = z3.And(z3_nexts)
+        ts.init = z3.And(z3_inits, self.ctx)
+        ts.tr = z3.And(z3_nexts, self.ctx)
         ts.bads = [bad.bitvec.to_z3_bool(m) for bad in self.bad_list]
         ts.constraints = [constraint.bitvec.to_z3_bool(m) for constraint in self.constraint_list]
         return ts
 
 
-def btor2chc(input_file: TextIO, output_file: TextIO) -> None:
-    import sys
-    from .chcpp import pp_chc_as_smt  # type: ignore
+def btor2ts(input_file: TextIO, simplify: bool = True, recursion_limit: int = 10000) -> Ts:
+    if recursion_limit > 0:
+        sys.setrecursionlimit(recursion_limit)
 
-    sys.setrecursionlimit(100000)
-
-    btor2_parser: Btor2Parser = Btor2Parser()
+    btor2_parser: Btor2Parser = Btor2Parser(z3.Context())
     btor2_parser.parse(input_file)
+
     ts: Ts = btor2_parser.to_ts()
     ts.reduce_constraints()
     ts.reduce_bads()
+    if simplify:
+        ts.simplify()
 
-    init: z3.ExprRef
-    tr: z3.ExprRef
-    bad: z3.ExprRef
-    inv: z3.FuncDeclRef
-    init, tr, bad, inv = generate_vc(ts)
-    db: HornClauseDb = generate_horn_clause_db(init, tr, bad)
+    return ts
+
+
+def btor2chc(input_file: TextIO, output_file: TextIO, simplify: bool = True,
+             recursion_limit: int = 10000, engine: str = 'spacer') -> None:
+    ts: Ts = btor2ts(input_file, simplify, recursion_limit)
+    db: HornClauseDb = generate_horn_clause_db(*generate_vc(ts)[:-1])
+
+    if engine:
+        output_file.write('(set-option :fp.engine {:s})\n'.format(engine))
+
     pp_chc_as_smt(db, output_file)
 
 
-def main():
+def btor2bmc(input_file: TextIO, output_file: TextIO, n: int, simplify: bool = True,
+             recursion_limit: int = 10000, engine: str = 'spacer') -> None:
+    ts: Ts = btor2ts(input_file, simplify, recursion_limit)
+    db: HornClauseDb = HornClauseDb(ctx=ts.ctx)
+    b: z3.ExprRef = bmc(ts.init, ts.tr, ts.bad(), n, ts.pre_vars, ts.post_vars, ts.inputs)
+    db.add_rule(HornRule(z3.Implies(b, False)))
+    db.seal()
+
+    if engine:
+        output_file.write('(set-option :fp.engine {:s})\n'.format(engine))
+
+    pp_chc_as_smt(db, output_file)
+
+
+def main() -> None:
     import argparse
     parser: argparse.ArgumentParser = argparse.ArgumentParser(
-        description='A tool to convert btor2 to CHC')
-    parser.add_argument('--input', action='store', type=str, required=True)
-    parser.add_argument('--output', action='store', type=str, required=True)
+        description='A tool to convert btor2 files to Constrained Horn Clauses (CHC) '
+                    'and pretty print them in the SMT-LIB format.')
+    parser.add_argument('input', metavar='FILE', help='input btor2 file', nargs='?',
+                        type=argparse.FileType('r'), default=sys.stdin)
+    parser.add_argument('-output', '--output', metavar='FILE', help='place the output into [FILE]',
+                        nargs='?', type=argparse.FileType('w+'), default=sys.stdout)
 
     args: argparse.Namespace = parser.parse_args()
 
-    input_file: TextIO
-    output_file: TextIO
-    with open(args.input) as input_file:
-        with open(args.output, 'w+') as output_file:
-            btor2chc(input_file, output_file)
+    btor2chc(args.input, args.output)
+    if args.input != sys.stdin:
+        args.input.close()
+    if args.output != sys.stdout:
+        args.output.close()
 
 
 if __name__ == '__main__':
