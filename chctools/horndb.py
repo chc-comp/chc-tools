@@ -291,7 +291,7 @@ class HornClauseDb(object):
         self._rels_set = frozenset()
         self._rels = dict()
         self._sealed = True
-        self._fp = False
+        self._fp = None
 
         self._simple_query = simplify_queries
 
