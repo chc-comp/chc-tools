@@ -5,7 +5,7 @@ from typing import Optional, List, TextIO, Union, Dict, Tuple, Callable, Any
 import pysmt.environment  # type: ignore
 import z3  # type: ignore
 
-from .chcpp import pp_chc_as_smt  # type: ignore
+from .chcpp import pp_chc  # type: ignore
 from .horndb import HornClauseDb, HornRule  # type: ignore
 
 
@@ -1513,7 +1513,7 @@ def btor2ts(input_file: TextIO, simplify: bool = True, recursion_limit: int = 10
     return ts
 
 
-def btor2chc(input_file: TextIO, output_file: TextIO, simplify: bool = True,
+def btor2chc(input_file: TextIO, output_file: TextIO, simplify: bool = True, fmt: str = "rules",
              recursion_limit: int = 10000, engine: str = 'spacer') -> None:
     ts: Ts = btor2ts(input_file, simplify, recursion_limit)
     db: HornClauseDb = generate_horn_clause_db(*generate_vc(ts)[:-1])
@@ -1521,11 +1521,11 @@ def btor2chc(input_file: TextIO, output_file: TextIO, simplify: bool = True,
     if engine:
         output_file.write('(set-option :fp.engine {:s})\n'.format(engine))
 
-    pp_chc_as_smt(db, output_file)
+    pp_chc(db, output_file, fmt)
 
 
 def btor2bmc(input_file: TextIO, output_file: TextIO, n: int, simplify: bool = True,
-             recursion_limit: int = 10000, engine: str = 'spacer') -> None:
+             fmt: str = "rules", recursion_limit: int = 10000, engine: str = 'spacer') -> None:
     ts: Ts = btor2ts(input_file, simplify, recursion_limit)
     db: HornClauseDb = HornClauseDb(ctx=ts.ctx)
     b: z3.ExprRef = bmc(ts.init, ts.tr, ts.bad(), n, ts.pre_vars, ts.post_vars, ts.inputs)
@@ -1535,7 +1535,7 @@ def btor2bmc(input_file: TextIO, output_file: TextIO, n: int, simplify: bool = T
     if engine:
         output_file.write('(set-option :fp.engine {:s})\n'.format(engine))
 
-    pp_chc_as_smt(db, output_file)
+    pp_chc(db, output_file, fmt)
 
 
 def main() -> None:
