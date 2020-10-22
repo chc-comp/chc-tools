@@ -1,3 +1,4 @@
 pysmt
+pyyaml
+z3-solver
 
-z3

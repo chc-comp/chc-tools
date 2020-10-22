@@ -10,6 +10,34 @@ import atexit
 import tempfile
 import shutil
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
+
+def add_bool_argument(parser, name, default=False,
+                      help=None, dest=None, **kwargs):
+    """
+    Add boolean option that can be turned on and off
+    """
+    import argparse
+    dest_name = dest if dest is not None else name
+    mutex_group = parser.add_mutually_exclusive_group(required=False)
+    mutex_group.add_argument('--' + name, dest=dest_name, type=str2bool,
+                             nargs='?', const=True, help=help,
+                             metavar='BOOL', **kwargs)
+    mutex_group.add_argument('--no-' + name, dest=dest_name,
+                             type=lambda v: not(str2bool(v)),
+                             nargs='?', const=False,
+                             help=argparse.SUPPRESS, **kwargs)
+    parser.set_defaults(dest_name=default)
+
 def add_help_arg (ap):
     ap.add_argument('-h', '--help', action='help',
                     help='Print this message and exit')

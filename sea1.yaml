@@ -1,0 +1,17 @@
+spacer_opts:
+  spacer.use_euf_gen: true
+  xform.slice: false
+  xform.inline_linear: false
+  xform.inline_eager: false
+  xform.tail_simplifier_pve: false
+  xform.subsumption_checker: false
+  spacer.order_children: 2
+  spacer.max_num_contexts: 600
+  spacer.elim_aux: true
+  spacer.reach_dnf: true
+  spacer.use_bg_invs: true
+  spacer.weak_abs: true
+  spacer.mbqi: false
+  spacer.ground_pobs: true
+  spacer.use_euf_gen: true
+  spacer.trace_file: /tmp/spacer.trace.log

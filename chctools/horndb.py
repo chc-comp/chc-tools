@@ -91,7 +91,7 @@ class HornRule(object):
         # this ensures that any simplifications that are done during _update() are
         # also reflected in the formula view
         self._formula = None
-        assert (self._head is not None)
+        assert self._head is not None
 
     def __str__(self):
         return str(self._formula)
@@ -143,15 +143,19 @@ class HornRule(object):
     def split_query(self):
         """Split query if it is not simple into a query and a rule"""
 
-        assert (self.is_query())
+        assert self.is_query()
         if self.is_simple_query():
             return self, None
 
         q = z3.Bool("simple!!query", self._ctx)
         query = HornRule(z3.Implies(q, False))
         if self._bound_constants:
-            rule = HornRule(z3.ForAll(self._bound_constants,
-                                      z3.Implies(z3.And(*self.body(), self._ctx), q)))
+            rule = HornRule(
+                z3.ForAll(
+                    self._bound_constants,
+                    z3.Implies(z3.And(*self.body(), self._ctx), q),
+                )
+            )
         else:
             rule = HornRule(z3.Implies(z3.And(*self.body(), self._ctx), q))
         return query, rule
@@ -196,8 +200,8 @@ class HornRule(object):
         return self._formula
 
     def mk_query(self):
-        assert (self.is_query())
-        assert (len(self.body()) > 0)
+        assert self.is_query()
+        assert len(self.body()) > 0
         _body = self.body()
         if self.is_simple_query():
             return _body[0]
@@ -235,9 +239,10 @@ class HornRelation(object):
         mgr = env.formula_manager
         converter = pyz3.Z3Converter(env, self.get_ctx())
         # noinspection PyProtectedMember
-        self._pysmt_sig = [mgr.Symbol(v.decl().name(),
-                                      converter._z3_to_type(v.sort()))
-                           for v in self._sig]
+        self._pysmt_sig = [
+            mgr.Symbol(v.decl().name(), converter._z3_to_type(v.sort()))
+            for v in self._sig
+        ]
 
     def _mk_arg_name(self, i):
         # can be arbitrary convenient name
@@ -255,12 +260,13 @@ class HornRelation(object):
 
     def __repr__(self):
         import io
+
         out = io.StringIO()
         out.write(str(self.name()))
         out.write("(")
         for v in self._pysmt_sig:
             out.write(str(v))
-            out.write(', ')
+            out.write(", ")
         out.write(")")
         return out.getvalue()
 
@@ -283,7 +289,7 @@ class HornRelation(object):
 
 
 class HornClauseDb(object):
-    def __init__(self, name='horn', simplify_queries=True, ctx=z3.main_ctx()):
+    def __init__(self, name="horn", simplify_queries=True, ctx=z3.main_ctx()):
         self._ctx = ctx
         self._name = name
         self._rules = []
@@ -343,8 +349,8 @@ class HornClauseDb(object):
         out = io.StringIO()
         for r in self._rules:
             out.write(str(r))
-            out.write('\n')
-        out.write('\n')
+            out.write("\n")
+        out.write("\n")
         for q in self._queries:
             out.write(str(q))
         return out.getvalue()
@@ -378,15 +384,21 @@ class HornClauseDb(object):
             self._fp = z3.Fixedpoint(ctx=self._ctx)
             fp = self._fp
 
-        assert fp.ctx == self._ctx
+        fp_ctx = fp.ctx
+        if fp_ctx == self._ctx:
+            def trans(x):
+                return x
+        else:
+            def trans(x):
+                return x.translate(fp_ctx)
 
         for rel in self._rels_set:
-            fp.register_relation(rel)
+            fp.register_relation(trans(rel))
         for r in self._rules:
             if r.has_formula():
-                fp.add_rule(r.get_formula())
+                fp.add_rule(trans(r.get_formula()))
             else:
-                fp.add_rule(r.mk_formula())
+                fp.add_rule(trans(r.mk_formula()))
 
         return fp
 
@@ -439,9 +451,10 @@ def main():
     print(db)
     print(db.get_rels())
     print(db._rels)
-    rel = db.get_rel('main@_bb723')
+    rel = db.get_rel("main@_bb723")
     lemma_stream = io.StringIO(
-        '(=> (< main@_bb723_0_n 1) (>= (+ main@_bb723_4_n main@_bb723_5_n) 0))')
+        "(=> (< main@_bb723_0_n 1) (>= (+ main@_bb723_4_n main@_bb723_5_n) 0))"
+    )
     lemma = rel.pysmt_parse_lemma(lemma_stream)
     print(lemma)
     print(lemma._content._asdict())
@@ -450,5 +463,5 @@ def main():
     return 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())
