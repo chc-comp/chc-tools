@@ -12,9 +12,9 @@ from .horndb import HornClauseDb, HornRule  # type: ignore
 def to_z3_bitvec(z3_expr: Union[z3.BitVecRef, z3.BoolRef]) -> z3.BitVecRef:
     if isinstance(z3_expr, z3.BitVecRef):
         return z3_expr
-    elif z3.is_true(z3_expr):
+    if z3.is_true(z3_expr):
         return z3.BitVecVal(1, 1, z3_expr.ctx)
-    elif z3.is_false(z3_expr):
+    if z3.is_false(z3_expr):
         return z3.BitVecVal(0, 1, z3_expr.ctx)
     return z3.If(z3_expr, z3.BitVecVal(1, 1, z3_expr.ctx), z3.BitVecVal(0, 1, z3_expr.ctx))
 
@@ -22,7 +22,7 @@ def to_z3_bitvec(z3_expr: Union[z3.BitVecRef, z3.BoolRef]) -> z3.BitVecRef:
 def to_z3_bool(z3_expr: Union[z3.BitVecRef, z3.BoolRef]) -> z3.BoolRef:
     if isinstance(z3_expr, z3.BoolRef):
         return z3_expr
-    elif isinstance(z3_expr, z3.BitVecNumRef):
+    if isinstance(z3_expr, z3.BitVecNumRef):
         return z3.BoolVal(z3_expr, z3_expr.ctx)
     return z3_expr == z3.BitVecVal(1, 1, z3_expr.ctx)
 
@@ -442,8 +442,7 @@ class Neq(Equality):
         z3_expr2: z3.ExprRef = self.expr2.to_z3_expr(m)
         if isinstance(z3_expr1, z3.BoolRef) or isinstance(z3_expr2, z3.BoolRef):
             return to_z3_bool(z3_expr1) != to_z3_bool(z3_expr2)
-        else:
-            return z3_expr1 != z3_expr2
+        return z3_expr1 != z3_expr2
 
 
 class Sgt(BitvecBinaryOp):
@@ -792,7 +791,7 @@ class ArrayIte(Array, Ite):
         cond_z3_bitvec: z3.BoolRef = self.cond_bitvec.to_z3_bool(m)
         if z3.is_true(cond_z3_bitvec):
             return self.then_expr.to_z3_expr(m)
-        elif z3.is_false(cond_z3_bitvec):
+        if z3.is_false(cond_z3_bitvec):
             return self.else_expr.to_z3_expr(m)
         return z3.If(self.cond_bitvec.to_z3_bool(m), self.then_expr.to_z3_expr(m),
                      self.else_expr.to_z3_expr(m))
@@ -814,7 +813,7 @@ class BitvecIte(Bitvec, Ite):
 
         if z3.is_true(cond_z3_bitvec):
             return then_z3_expr
-        elif z3.is_false(cond_z3_bitvec):
+        if z3.is_false(cond_z3_bitvec):
             return else_z3_expr
 
         if isinstance(then_z3_expr, z3.BoolRef) or isinstance(else_z3_expr, z3.BoolRef):
@@ -1001,8 +1000,7 @@ class Ts:
         self.reduce_bads()
         if self.bads:
             return self.bads[0]
-        else:
-            return z3.Bool(False, self.ctx)
+        return z3.Bool(False, self.ctx)
 
     def reduce_bads(self) -> None:
         if len(self.bads) > 1:
@@ -1084,7 +1082,8 @@ def bmc(init: z3.ExprRef, tr: z3.ExprRef, bad: z3.ExprRef, n: int, pre_vars: Lis
     ips: List[z3.ExprRef] = inputs.copy()
     all_vars: List[z3.ExprRef] = pre_vars + post_vars + inputs
 
-    for i in range(n - 1):
+    _: int
+    for _ in range(n - 1):
         new_vars: List[z3.ExprRef] = []
         new_ips: List[z3.ExprRef] = []
         var: z3.ExprRef
@@ -1173,9 +1172,8 @@ class Btor2Parser:
     def parse(self, source: TextIO) -> None:
         for line in source:
             line_left: str
-            sep: str
-            line_right: str
-            line_left, sep, line_right = line.partition(';')
+            _: str
+            line_left, _, _ = line.partition(';')
             tokens: List[str] = line_left.split()
 
             if len(tokens) == 0:
@@ -1196,16 +1194,16 @@ class Btor2Parser:
             if name == 'bad':
                 self.bad_list.append(Bad(nid, self.get_bitvec(tokens[2])))
                 continue
-            elif name == 'constraint':
+            if name == 'constraint':
                 self.constraint_list.append(Constraint(nid, self.get_bitvec(tokens[2])))
                 continue
-            elif name == 'fair':
+            if name == 'fair':
                 self.fair_list.append(Fair(nid, self.get_expr(tokens[2])))
                 continue
-            elif name == 'output':
+            if name == 'output':
                 self.output_list.append(Output(nid, self.get_expr(tokens[2])))
                 continue
-            elif name == 'justice':
+            if name == 'justice':
                 n: int = int(tokens[2])
                 self.justice_list.append(
                     Justice(nid, n, [self.get_expr(x) for x in tokens[3:3 + n]]))
@@ -1223,7 +1221,7 @@ class Btor2Parser:
                                                       self.get_array(tokens[3]),
                                                       self.get_expr(tokens[4]))
                 continue
-            elif name == 'state':
+            if name == 'state':
                 state_sid: int = int(tokens[2])
                 if state_sid in self.bitvec_sort_table:
                     bitvec_state: BitvecState = BitvecState(nid, self.get_bitvec_sort(state_sid))
@@ -1232,7 +1230,7 @@ class Btor2Parser:
                     array_state: ArrayState = ArrayState(nid, self.get_array_sort(state_sid))
                     self.array_state_table[nid] = self.array_table[nid] = array_state
                 continue
-            elif name == 'input':
+            if name == 'input':
                 input_sid: int = int(tokens[2])
                 if input_sid in self.bitvec_sort_table:
                     bitvec_input: BitvecInput = BitvecInput(nid, self.get_bitvec_sort(input_sid))
@@ -1241,26 +1239,26 @@ class Btor2Parser:
                     array_input: ArrayInput = ArrayInput(nid, self.get_array_sort(input_sid))
                     self.array_input_table[nid] = self.array_table[nid] = array_input
                 continue
-            elif name == 'init':
+            if name == 'init':
                 init_sid: int = int(tokens[2])
                 if init_sid in self.bitvec_sort_table:
                     self.get_bitvec_state(tokens[3]).init = self.get_bitvec(tokens[4])
                 elif init_sid in self.array_sort_table:
                     self.get_array_state(tokens[3]).init = self.get_expr(tokens[4])
                 continue
-            elif name == 'next':
+            if name == 'next':
                 next_sid: int = int(tokens[2])
                 if next_sid in self.bitvec_sort_table:
                     self.get_bitvec_state(tokens[3]).next = self.get_bitvec(tokens[4])
                 elif next_sid in self.array_sort_table:
                     self.get_array_state(tokens[3]).next = self.get_array(tokens[4])
                 continue
-            elif name == 'write':
+            if name == 'write':
                 self.array_table[nid] = Write(nid, self.get_array_sort(int(tokens[2])),
                                               self.get_array(tokens[3]),
                                               self.get_expr(tokens[4]), self.get_expr(tokens[5]))
                 continue
-            elif name == "ite":
+            if name == "ite":
                 ite_sid: int = int(tokens[2])
                 if ite_sid in self.bitvec_sort_table:
                     self.bitvec_table[nid] = BitvecIte(nid, self.bitvec_sort_table[ite_sid],
@@ -1446,7 +1444,7 @@ class Btor2Parser:
 
         for nid, bitvec_input in self.bitvec_input_table.items():
             z3_expr = ts.put_input(bitvec_input.sort.to_z3_sort(self.ctx), bitvec_input.symbol)
-            if isinstance(z3_expr, z3.BitVecRef) or isinstance(z3_expr, z3.BoolRef):
+            if isinstance(z3_expr, (z3.BitVecRef, z3.BoolRef)):
                 m.z3_bitvec_or_bool_m[nid] = z3_expr
             else:
                 raise ValueError
@@ -1547,10 +1545,12 @@ def main() -> None:
                         type=argparse.FileType('r'), default=sys.stdin)
     parser.add_argument('-output', '--output', metavar='FILE', help='place the output into [FILE]',
                         nargs='?', type=argparse.FileType('w+'), default=sys.stdout)
+    parser.add_argument('-fmt', '--fmt', help='format of the output (default: rules)', type=str,
+                        choices=['smt', 'rules'], default='rules')
 
     args: argparse.Namespace = parser.parse_args()
 
-    btor2chc(args.input, args.output)
+    btor2chc(args.input, args.output, fmt=args.fmt)
     if args.input != sys.stdin:
         args.input.close()
     if args.output != sys.stdout:
