@@ -437,17 +437,17 @@ class FolModel(object):
         return repr(self._fn_interps)
 
 
-def load_horn_db_from_file(fname):
-    fp = z3.Fixedpoint()
+def load_horn_db_from_file(fname, context = z3.main_ctx()):
+    fp = z3.Fixedpoint(ctx = context)
     queries = fp.parse_file(fname)
-    db = HornClauseDb(fname)
+    db = HornClauseDb(fname, ctx = context)
     db.load_from_fp(fp, queries)
     return db
 
 
 # noinspection PyProtectedMember
 def main():
-    db = load_horn_db_from_file(sys.argv[1])
+    db = load_horn_db_from_file(sys.argv[1], z3.main_ctx())
     print(db)
     print(db.get_rels())
     print(db._rels)
