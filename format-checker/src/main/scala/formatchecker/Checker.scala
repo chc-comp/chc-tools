@@ -474,7 +474,14 @@ object LIALinArraysChecker extends AbstractLIALinChecker {
 
 object LIAArraysChecker extends AbstractLIAChecker {
 
-  override val possibleSorts = Set("Int", "Bool", "(Array Int Int)")
+  override def isPossibleSort(s : Sort) = s match {
+    case s : CompositeSort
+        if (printer print s.identifier_) == "Array" &&
+           s.listsort_.size == 2 =>
+      s.listsort_.asScala forall isPossibleSort
+    case s =>
+      possibleSorts contains (printer print s)
+  }
 
 }
 

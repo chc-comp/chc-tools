@@ -17,7 +17,8 @@ class RegressionTests extends FlatSpec {
                LIALin : Boolean = false,
                LRA : Boolean = false,
                LRATS : Boolean = false,
-               LIALinArrays : Boolean = false) = {
+               LIALinArrays : Boolean = false,
+               LIAArrays : Boolean = false) = {
     filename should ((if (general) "" else "not ") + "parse") in {
       assert(Checker(Array(PREFIX + filename)) == general)
     }
@@ -36,6 +37,9 @@ class RegressionTests extends FlatSpec {
     it should ((if (LIALin || LIALinArrays) "be" else "not be") + " LIA-Lin-Arrays") in {
       assert(LIALinArraysChecker(Array(PREFIX + filename)) == (LIALin || LIALinArrays))
     }
+    it should ((if (LIALin || LIA || LIALinArrays || LIAArrays) "be" else "not be") + " LIA-Arrays") in {
+      assert(LIAArraysChecker(Array(PREFIX + filename)) == (LIALin || LIA || LIALinArrays || LIAArrays))
+    }
   }
 
   testFile("LIA-lin.smt2", LIA = true, LIALin = true)
@@ -46,6 +50,7 @@ class RegressionTests extends FlatSpec {
   testFile("multi-queries.smt2", LIA = true, LIALin = true)
 //  testFile("const-arrays.smt2", LIALinArrays = true)
   testFile("chc-lia-lin-arr-0080_000.smt2", LIALinArrays = true)
+  testFile("nonlin-arrays.smt2", LIAArrays = true)
 
   testFile("chc-lra-0002.smt2", LRA = true, LRATS = true)
   testFile("chc-lia-lin-arr-0000-fixed.smt2", LIALinArrays = true)
