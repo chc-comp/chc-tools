@@ -64,4 +64,5 @@ class RegressionTests extends FlatSpec {
   testFile("from-z3-script/tail_is_not_conj.smt2", LIA = true, LIALin = true)
   testFile("from-z3-script/uf_in_iformula_1.smt2", general = false)
   testFile("from-z3-script/uf_in_iformula_2.smt2", general = false)
+  testFile("LRA.smt2", LRA = true, LRATS = true)
 }
