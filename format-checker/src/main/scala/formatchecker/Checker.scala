@@ -396,8 +396,11 @@ class AbstractChecker {
     Set("not", "and", "or", "=>", "true", "false",
         "ite",
         "=", "distinct", "<", ">", "<=", ">=",
-        "+", "-", "*", "mod", "div", "abs", "/", // "to_real", "to_int",
+        "+", "-", /* "*", */ "mod", "div", "abs", "/", // "to_real", "to_int",
         "select", "store")
+
+  val Numeral =
+    """[0-9]+|\(- [0-9]+\)""".r
 
   object InterpretedFormulaVisitor extends FoldVisitor[Boolean, Unit] {
     def leaf(arg : Unit) = true
@@ -408,6 +411,15 @@ class AbstractChecker {
 //          super.visit(p, arg)
         case r if (interpretedFunctions contains (printer print r)) =>
           super.visit(p, arg)
+        case r if (printer print r) == "*" =>
+          // only multiplication with constants is allowed
+          (p.listterm_.asScala.toList filterNot {
+            t =>
+              (printer print t) match {
+                case Numeral() => true
+                case _ => false
+              }
+          }).size <= 1
         case _ => {
 //          println("did not recognise as interpreted: " + (printer print p))
           false
