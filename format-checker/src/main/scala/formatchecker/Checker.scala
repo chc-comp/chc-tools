@@ -396,7 +396,7 @@ class AbstractChecker {
     Set("not", "and", "or", "=>", "true", "false",
         "ite",
         "=", "distinct", "<", ">", "<=", ">=",
-        "+", "-", "*", "mod", "div", "abs", "/", // "to_real", "to_int",
+        "+", "-", /* "*", */ "mod", "div", "abs", "/", // "to_real", "to_int",
         "select", "store")
 
   object InterpretedFormulaVisitor extends FoldVisitor[Boolean, Unit] {
@@ -408,12 +408,35 @@ class AbstractChecker {
 //          super.visit(p, arg)
         case r if (interpretedFunctions contains (printer print r)) =>
           super.visit(p, arg)
+        case r if (printer print r) == "*" =>
+          // only multiplication with constants is allowed
+          (p.listterm_.asScala.toList filterNot {
+            t => t.accept(ConstantTermVisitor, ())
+           }).size <= 1
         case _ => {
 //          println("did not recognise as interpreted: " + (printer print p))
           false
         }
       }
     }
+  }
+
+  val constantCtorFunctions =
+    Set("+", "-", "*", "mod", "div", "abs", "/", "select", "store")
+
+  object ConstantTermVisitor extends FoldVisitor[Boolean, Unit] {
+    def leaf(arg : Unit) = true
+    def combine(x : Boolean, y : Boolean, arg : Unit) = x && y
+
+    override def visit(p : FunctionTerm, arg : Unit) =
+      constantCtorFunctions contains (printer print p.symbolref_)
+    override def visit(p : NullaryTerm, arg : Unit) = false
+
+    override def visit(p : NumConstant, arg : Unit) = true
+    override def visit(p : RatConstant, arg : Unit) = true
+    override def visit(p : HexConstant, arg : Unit) = true
+    override def visit(p : BinConstant, arg : Unit) = true
+    override def visit(p : StringConstant, arg : Unit) = true
   }
 
 }
@@ -474,7 +497,14 @@ object LIALinArraysChecker extends AbstractLIALinChecker {
 
 object LIAArraysChecker extends AbstractLIAChecker {
 
-  override val possibleSorts = Set("Int", "Bool", "(Array Int Int)")
+  override def isPossibleSort(s : Sort) = s match {
+    case s : CompositeSort
+        if (printer print s.identifier_) == "Array" &&
+           s.listsort_.size == 2 =>
+      s.listsort_.asScala forall isPossibleSort
+    case s =>
+      possibleSorts contains (printer print s)
+  }
 
 }
 
