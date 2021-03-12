@@ -228,8 +228,6 @@ class HornRelation(object):
         self._env = pysmt.environment.Environment()
         self._update()
 
-
-
     def _update(self):
         self._sig = []
         for i in range(self._fdecl.arity()):
