@@ -225,7 +225,10 @@ class HornRelation(object):
         self._pysmt_sig = []
         self._lemma_parser = None
 
+        self._env = pysmt.environment.Environment()
         self._update()
+
+
 
     def _update(self):
         self._sig = []
@@ -235,9 +238,8 @@ class HornRelation(object):
             self._sig.append(z3.Const(name, sort))
 
         # compute pysmt version of the signature
-        env = pysmt.environment.get_env()
-        mgr = env.formula_manager
-        converter = pyz3.Z3Converter(env, self.get_ctx())
+        mgr = self._env.formula_manager
+        converter = pyz3.Z3Converter(self._env, self.get_ctx())
         # noinspection PyProtectedMember
         self._pysmt_sig = [
             mgr.Symbol(v.decl().name(), converter._z3_to_type(v.sort()))
