@@ -219,12 +219,15 @@ class HornRule(object):
 
 
 class HornRelation(object):
-    def __init__(self, fdecl):
+    def __init__(self, fdecl, env = None):
         self._fdecl = fdecl
         self._sig = []
         self._pysmt_sig = []
         self._lemma_parser = None
-
+        if env is not None:
+            self._env = env
+        else:
+            self._env = pysmt.environment.get_env()
         self._update()
 
     def _update(self):
@@ -235,9 +238,9 @@ class HornRelation(object):
             self._sig.append(z3.Const(name, sort))
 
         # compute pysmt version of the signature
-        env = pysmt.environment.get_env()
-        mgr = env.formula_manager
-        converter = pyz3.Z3Converter(env, self.get_ctx())
+
+        mgr = self._env.formula_manager
+        converter = pyz3.Z3Converter(self._env, self.get_ctx())
         # noinspection PyProtectedMember
         self._pysmt_sig = [
             mgr.Symbol(v.decl().name(), converter._z3_to_type(v.sort()))
@@ -289,7 +292,7 @@ class HornRelation(object):
 
 
 class HornClauseDb(object):
-    def __init__(self, name="horn", simplify_queries=True, ctx=z3.main_ctx()):
+    def __init__(self, name="horn", simplify_queries=True, ctx=z3.main_ctx(), env = None):
         self._ctx = ctx
         self._name = name
         self._rules = []
@@ -298,8 +301,10 @@ class HornClauseDb(object):
         self._rels = dict()
         self._sealed = True
         self._fp = None
-
+        self._env = env
         self._simple_query = simplify_queries
+
+
 
     def add_rule(self, horn_rule):
         assert self._ctx == horn_rule.get_ctx()
@@ -343,7 +348,7 @@ class HornClauseDb(object):
         self._sealed = True
 
         for rel in self._rels_set:
-            self._rels[str(rel.name())] = HornRelation(rel)
+            self._rels[str(rel.name())] = HornRelation(rel, env = self._env)
 
     def __str__(self):
         out = io.StringIO()
@@ -437,10 +442,10 @@ class FolModel(object):
         return repr(self._fn_interps)
 
 
-def load_horn_db_from_file(fname, context = z3.main_ctx()):
+def load_horn_db_from_file(fname, context = z3.main_ctx(), env = None):
     fp = z3.Fixedpoint(ctx = context)
     queries = fp.parse_file(fname)
-    db = HornClauseDb(fname, ctx = context)
+    db = HornClauseDb(fname, ctx = context, env = env)
     db.load_from_fp(fp, queries)
     return db
 
