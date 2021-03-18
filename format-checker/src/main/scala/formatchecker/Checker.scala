@@ -396,7 +396,7 @@ class AbstractChecker {
     Set("not", "and", "or", "=>", "true", "false",
         "ite",
         "=", "distinct", "<", ">", "<=", ">=",
-        "+", "-", /* "*", */ "mod", "div", "abs", "/", // "to_real", "to_int",
+        "+", "-", /* "*", "mod", "div", */ "abs", "/", // "to_real", "to_int",
         "select", "store")
 
   object InterpretedFormulaVisitor extends FoldVisitor[Boolean, Unit] {
@@ -413,6 +413,9 @@ class AbstractChecker {
           (p.listterm_.asScala.toList filterNot {
             t => t.accept(ConstantTermVisitor, ())
            }).size <= 1
+        case r if (Set("div", "mod") contains (printer print r)) =>
+          // denominator has to be constant
+          p.listterm_.get(1).accept(ConstantTermVisitor, ())
         case _ => {
 //          println("did not recognise as interpreted: " + (printer print p))
           false

@@ -43,7 +43,9 @@ class RegressionTests extends FlatSpec {
   }
 
   testFile("NIA.smt2", general = false)
+  testFile("NIA2.smt2", general = false)
   testFile("LIA-mul.smt2", LIA = true, LIALin = true)
+  testFile("LIA-mod.smt2", LIA = true, LIALin = true)
   testFile("LIA-lin.smt2", LIA = true, LIALin = true)
   testFile("LIA-nonlin.smt2", LIA = true)
   testFile("LIA-bad-query-head.smt2", general = false)
