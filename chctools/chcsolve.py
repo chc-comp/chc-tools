@@ -2,6 +2,7 @@
 import sys
 
 import z3  # type: ignore
+
 from .core import CliCmd, add_bool_argument  # type : ignore
 from .horndb import load_horn_db_from_file  # type: ignore
 
@@ -80,6 +81,14 @@ def chc_solve_with_cli(fname, args, opts):
         elif v is False:
             return "false"
         return str(v)
+
+    if not args.pp:
+        opts["fp.xform.slice"] = False
+        opts["fp.xform.inline_linear"] = False
+        opts["fp.xfom.inline_eager"] = False
+
+    if args.spctr is not None:
+        opts["fp.spacer.trace_file"] = args.spctr
 
     for k, v in opts.items():
         cmd.append("fp.{}={}".format(k, bool2str(v)))
