@@ -83,12 +83,12 @@ def chc_solve_with_cli(fname, args, opts):
         return str(v)
 
     if not args.pp:
-        opts["fp.xform.slice"] = False
-        opts["fp.xform.inline_linear"] = False
-        opts["fp.xfom.inline_eager"] = False
+        opts["xform.slice"] = False
+        opts["xform.inline_linear"] = False
+        opts["xfom.inline_eager"] = False
 
     if args.spctr is not None:
-        opts["fp.spacer.trace_file"] = args.spctr
+        opts["spacer.trace_file"] = args.spctr
 
     for k, v in opts.items():
         cmd.append("fp.{}={}".format(k, bool2str(v)))
