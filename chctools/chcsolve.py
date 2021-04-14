@@ -85,7 +85,7 @@ def chc_solve_with_cli(fname, args, opts):
     if not args.pp:
         opts["xform.slice"] = False
         opts["xform.inline_linear"] = False
-        opts["xfom.inline_eager"] = False
+        opts["xform.inline_eager"] = False
 
     if args.spctr is not None:
         opts["spacer.trace_file"] = args.spctr
