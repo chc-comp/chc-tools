@@ -1933,6 +1933,54 @@ def btor2bmc(
 
     pp_chc(db, output_file, fmt)
 
+"""
+    Helper functions to generate and substitute variables in
+    our transition relations
+"""
+index = 0
+def freshInput( sort, x, at_time=0 ) -> z3.Const:
+    input_name = "%s_%d" %( x.sexpr().split("_")[0], at_time )
+    return z3.Const( input_name, sort )
+    
+def fresh( s ) -> z3.Const:
+    global index
+    index += 1
+    return z3.Const("!f%d" % index, s)
+
+def zipp(xs, ys):
+    return [p for p in zip(xs, ys)]
+ 
+"""
+    A BMC adopted from the z3 guide to provide a
+    faster implementation that does not rely on the spacer engine
+"""
+def bmc2model(ts: Ts, k: int) -> (z3.Solver.model, int ):
+    #init, trans, goal, fvs, xs, xns
+    init = ts.init
+    trans = ts.tr
+    goal = ts.bad()
+    xs = ts.pre_vars
+    xns = ts.post_vars
+    fvs = ts.inputs
+
+    solver = z3.Solver(ctx=init.ctx)
+    solver.add( init )
+    step = 0
+
+    while step < k:
+        step += 1
+        p = fresh( z3.BoolSort(ctx=init.ctx) )
+        solver.add( z3.Implies( p, goal ))
+        if z3.sat == solver.check( p ):
+            return ( solver.model(), step )
+        solver.add( trans )
+        ys = [fresh( x.sort() ) for x in xs]
+        nfvs = [freshInput( x.sort(), x, step ) for x in fvs]
+        trans = z3.substitute(trans, zipp( xns + xs + fvs, ys + xns + nfvs ))
+        goal = z3.substitute( goal, zipp(xs, xns) )
+        xs, xns, fvs = xns, ys, nfvs
+    return ( None, step )
+
 
 def main() -> None:
     import argparse
@@ -1970,6 +2018,12 @@ def main() -> None:
     args: argparse.Namespace = parser.parse_args()
 
     btor2chc(args.input, args.output, fmt=args.fmt, n=1)
+
+    # new BMC in use
+    ts: Ts = btor2ts( args.input )
+    model = bmc2model( ts, 100 )
+    print( "unsat after %d steps" %(model[1]) if model[0] is None else "sat in %d steps" %(model[1]) )
+
     if args.input != sys.stdin:
         args.input.close()
     if args.output != sys.stdout:
