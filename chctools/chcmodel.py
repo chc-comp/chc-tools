@@ -1,6 +1,6 @@
 ### Model Validator
 import sys
-from .core import CliCmd, add_in_out_args
+from .core import CliCmd, add_in_out_args, add_bool_argument
 from .horndb import HornClauseDb, HornRule, FolModel, load_horn_db_from_file
 from .solver_utils import pushed_solver
 
@@ -78,6 +78,7 @@ class ModelValidator(object):
             res = res and v
         return res
 
+
 class ChcModelCmd(CliCmd):
     def __init__(self):
         super().__init__('chcmodel', 'Model validator', allow_extra=False)
@@ -86,15 +87,20 @@ class ChcModelCmd(CliCmd):
         ap = super().mk_arg_parser(ap)
         ap.add_argument('-m', dest='model_file',
                          metavar='FILE', help='Model in SMT2 format', default='model.smt2')
+        add_bool_argument(ap, "simplify-queries", dest='simple_q',
+                          default=False, help='Automatically simplify queries')
         ap.add_argument('in_file',  metavar='FILE', help='Input file')
         return ap
 
+
     def run(self, args, extra):
-        db = load_horn_db_from_file(args.in_file)
+        db = load_horn_db_from_file(args.in_file,
+                                    simplify_queries=args.simple_q)
         model = load_model_from_file(args.model_file)
         validator = ModelValidator(db, model)
         res = validator.validate()
         return 0 if res else 1;
+
 
 if __name__ == '__main__':
     #logging.basicConfig(level=logging.INFO)
