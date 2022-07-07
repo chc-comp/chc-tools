@@ -442,10 +442,12 @@ class FolModel(object):
         return repr(self._fn_interps)
 
 
-def load_horn_db_from_file(fname, context = z3.main_ctx(), env = None):
-    fp = z3.Fixedpoint(ctx = context)
+def load_horn_db_from_file(fname, context=z3.main_ctx(),
+                           simplify_queries=True, env=None):
+    fp = z3.Fixedpoint(ctx=context)
     queries = fp.parse_file(fname)
-    db = HornClauseDb(fname, ctx = context, env = env)
+    db = HornClauseDb(fname, ctx=context,
+                      simplify_queries=simplify_queries, env=env)
     db.load_from_fp(fp, queries)
     return db
 
