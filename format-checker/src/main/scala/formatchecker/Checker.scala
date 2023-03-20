@@ -6,6 +6,7 @@ import ap.parser.smtlib.Absyn._
 
 import scala.{Option => SOption}
 import scala.collection.JavaConverters._
+import scala.util.matching.Regex
 
 /**
  * Verify that an SMT-LIB script is in the CHC-COMP fragment.
@@ -149,6 +150,7 @@ class AbstractChecker {
     setInfoSeq ++
     SetLogic.asSeq ++
     setInfoSeq ++
+    DtDecl.asSeq.* ++
     FunDecl.asSeq.* ++
     (CHCAssertClause | CHCAssertFact).asSeq.* ++
     CHCQuery.asSeq ++
@@ -216,6 +218,17 @@ class AbstractChecker {
     def check(t : AnyRef) : Boolean = t match {
       case c : CheckSatCommand =>
         true
+      case _ =>
+        false
+    }
+  }
+
+  object DtDecl extends SMTLIBElement {
+    def check(t : AnyRef) : Boolean = t match {
+      case c : DataDeclCommand  =>
+        !dtDeclVisitor.visit(c, ())
+      case c : DataDeclsCommand =>
+        !dtDeclVisitor.visit(c, ())
       case _ =>
         false
     }
@@ -392,7 +405,11 @@ class AbstractChecker {
 
   //////////////////////////////////////////////////////////////////////////////
 
-  val interpretedFunctions =
+  var dtSorts = Set[String]()
+  var dtUsedSorts : String = ""
+  var recursiveDtSorts = Set[String]()
+
+  var interpretedFunctions =
     Set("not", "and", "or", "=>", "true", "false",
         "ite",
         "=", "distinct", "<", ">", "<=", ">=",
@@ -404,8 +421,11 @@ class AbstractChecker {
     def combine(x : Boolean, y : Boolean, arg : Unit) = x && y
     override def visit(p : FunctionTerm, arg : Unit) = {
       p.symbolref_ match {
-//        case r : CastIdentifierRef if (printer print r.identifier_) == "const" =>
-//          super.visit(p, arg)
+        case r : CastIdentifierRef if (printer print r.identifier_) == "const" =>
+          (p.listterm_.asScala forall {
+            t => t.accept(ConstantTermVisitor, ())
+          })
+          super.visit(p, arg)
         case r if (interpretedFunctions contains (printer print r)) =>
           super.visit(p, arg)
         case r if (printer print r) == "*" =>
@@ -417,14 +437,44 @@ class AbstractChecker {
           // denominator has to be constant
           p.listterm_.get(1).accept(ConstantTermVisitor, ())
         case _ => {
-//          println("did not recognise as interpreted: " + (printer print p))
+          // println("did not recognise as interpreted: " + (printer print p))
           false
         }
       }
     }
   }
 
-  val constantCtorFunctions =
+  object dtDeclVisitor extends FoldVisitor[Boolean, Unit] {
+    def leaf(arg : Unit) = false
+    def combine(x : Boolean, y : Boolean, arg : Unit) = x || y
+    //for constructor c, we add the following testers: (_ is c) is-c. The first is defined in SMTLIB and the second is used in Princess
+    def testers(c : ap.parser.smtlib.Absyn.Symbol) = Set("is-" + (printer print c), "(_ is " + (printer print c) +")")
+
+    override def visit(p : NullConstructorDecl, arg : Unit) = {
+      interpretedFunctions = interpretedFunctions ++ testers(p.symbol_) + (printer print p.symbol_);
+      constantCtorFunctions = constantCtorFunctions + (printer print p.symbol_);
+      false
+    }
+
+    override def visit(p : ConstructorDecl, arg : Unit) = {
+      interpretedFunctions = interpretedFunctions ++ testers(p.symbol_) + (printer print p.symbol_);
+      super.visit(p, arg)
+    }
+
+    override def visit(p : SelectorDecl, arg : Unit) = {
+      interpretedFunctions = interpretedFunctions + (printer print p.symbol_);
+      dtUsedSorts = dtUsedSorts + (printer print p.sort_)
+      false
+    }
+
+    override def visit(p : PolySort, arg : Unit) = {
+      dtSorts = dtSorts + (printer print p.symbol_)
+      p.numeral_ != "0"
+    }
+  }
+
+
+  var constantCtorFunctions =
     Set("+", "-", "*", "mod", "div", "abs", "/", "select", "store")
 
   object ConstantTermVisitor extends FoldVisitor[Boolean, Unit] {
@@ -434,7 +484,8 @@ class AbstractChecker {
     override def visit(p : FunctionTerm, arg : Unit) =
       constantCtorFunctions contains (printer print p.symbolref_)
     override def visit(p : NullaryTerm, arg : Unit) = false
-
+    override def visit(p: CastIdentifierRef, arg: Unit) =
+      p.identifier_ == "const"
     override def visit(p : NumConstant, arg : Unit) = true
     override def visit(p : RatConstant, arg : Unit) = true
     override def visit(p : HexConstant, arg : Unit) = true
@@ -507,6 +558,60 @@ object LIAArraysChecker extends AbstractLIAChecker {
       s.listsort_.asScala forall isPossibleSort
     case s =>
       possibleSorts contains (printer print s)
+  }
+
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+
+object ADTLIAChecker extends AbstractChecker {
+
+  var possibleSorts = Set("Int", "Bool")
+  val arrayPattern : Regex = ".*Array.*".r
+
+  def isPossibleSort(s : Sort) = s match {
+    case s : CompositeSort if (printer print s.identifier_) == "Array" =>
+      false
+    case s : Sort =>
+      (possibleSorts contains (printer print s)) ||
+      (dtSorts.contains((printer print s)) && arrayPattern.findFirstIn(dtUsedSorts) == None)
+  }
+
+  override val AcceptedSort : SMTLIBElement = new SMTLIBElement {
+    def check(t : AnyRef) : Boolean = t match {
+      case s : Sort =>
+        isPossibleSort(s)
+      case _ =>
+        false
+    }
+  }
+
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+//TODO: implement check for recursion
+object LIAADTArraysChecker extends AbstractChecker {
+
+  var possibleSorts = Set("Int", "Bool")
+
+  def isPossibleSort(s : Sort) : Boolean = s match {
+    case s : CompositeSort
+        if (printer print s.identifier_) == "Array" &&
+           s.listsort_.size == 2 =>
+      s.listsort_.asScala forall isPossibleSort
+    case s =>
+      ((possibleSorts ++ dtSorts) contains (printer print s)) // && !(recursiveDtSorts contains (printer print s))
+  }
+
+  override val AcceptedSort : SMTLIBElement = new SMTLIBElement {
+    def check(t : AnyRef) : Boolean = t match {
+      case s : Sort =>
+        isPossibleSort(s)
+      case _ =>
+        false
+    }
   }
 
 }
