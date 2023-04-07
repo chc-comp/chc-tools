@@ -491,6 +491,7 @@ class AbstractChecker {
     override def visit(p : HexConstant, arg : Unit) = true
     override def visit(p : BinConstant, arg : Unit) = true
     override def visit(p : StringConstant, arg : Unit) = true
+    override def visit(p : StringSQConstant, arg : Unit) = true
   }
 
 }
