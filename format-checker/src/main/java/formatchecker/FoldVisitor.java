@@ -167,6 +167,16 @@ public abstract class FoldVisitor<R,A> implements AllVisitor<R,A> {
       }
       return r;
     }
+    public R visit(ap.parser.smtlib.Absyn.SimplifyCommand p, A arg) {
+      R r = leaf(arg);
+      r = combine(p.term_.accept(this, arg), r, arg);
+      return r;
+    }
+    /*WARNING: this is just a stub to make compiler happy. TODO: Implement*/
+    public R visit(ap.parser.smtlib.Absyn.HeapDeclCommand p, A arg) {
+      R r = leaf(arg);
+      return r;
+    }
     public R visit(ap.parser.smtlib.Absyn.GetProofCommand p, A arg) {
       R r = leaf(arg);
       return r;
@@ -392,7 +402,10 @@ public abstract class FoldVisitor<R,A> implements AllVisitor<R,A> {
       R r = leaf(arg);
       return r;
     }
-
+    public R visit(ap.parser.smtlib.Absyn.LbdQuantifier p, A arg) {
+      R r = leaf(arg);
+      return r;
+    }
 /* SymbolRef */
     public R visit(ap.parser.smtlib.Absyn.IdentifierRef p, A arg) {
       R r = leaf(arg);
@@ -455,6 +468,10 @@ public abstract class FoldVisitor<R,A> implements AllVisitor<R,A> {
       R r = leaf(arg);
       return r;
     }
+    public R visit(ap.parser.smtlib.Absyn.StringSQConstant p, A arg) {
+      R r = leaf(arg);
+      return r;
+    }
 
 /* MetaConstant */
     public R visit(ap.parser.smtlib.Absyn.NumMetaConstant p, A arg) {
@@ -495,7 +512,12 @@ public abstract class FoldVisitor<R,A> implements AllVisitor<R,A> {
     }
 
 /* IndexC */
-    public R visit(ap.parser.smtlib.Absyn.Index p, A arg) {
+    public R visit(ap.parser.smtlib.Absyn.NumIndex p, A arg) {
+      R r = leaf(arg);
+      return r;
+    }
+
+    public R visit(ap.parser.smtlib.Absyn.SymIndex p, A arg) {
       R r = leaf(arg);
       return r;
     }

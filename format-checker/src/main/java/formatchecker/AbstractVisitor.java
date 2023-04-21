@@ -28,6 +28,8 @@ public class AbstractVisitor<R,A> implements AllVisitor<R,A> {
     public R visit(ap.parser.smtlib.Absyn.CheckSatCommand p, A arg) { return visitDefault(p, arg); }
     public R visit(ap.parser.smtlib.Absyn.GetAssertionsCommand p, A arg) { return visitDefault(p, arg); }
     public R visit(ap.parser.smtlib.Absyn.GetValueCommand p, A arg) { return visitDefault(p, arg); }
+    public R visit(ap.parser.smtlib.Absyn.SimplifyCommand p, A arg) { return visitDefault(p, arg); }
+    public R visit(ap.parser.smtlib.Absyn.HeapDeclCommand p, A arg) { return visitDefault(p, arg); }
     public R visit(ap.parser.smtlib.Absyn.GetProofCommand p, A arg) { return visitDefault(p, arg); }
     public R visit(ap.parser.smtlib.Absyn.GetUnsatCoreCommand p, A arg) { return visitDefault(p, arg); }
     public R visit(ap.parser.smtlib.Absyn.GetAssignmentCommand p, A arg) { return visitDefault(p, arg); }
@@ -106,6 +108,7 @@ public class AbstractVisitor<R,A> implements AllVisitor<R,A> {
     public R visit(ap.parser.smtlib.Absyn.AllQuantifier p, A arg) { return visitDefault(p, arg); }
     public R visit(ap.parser.smtlib.Absyn.ExQuantifier p, A arg) { return visitDefault(p, arg); }
     public R visit(ap.parser.smtlib.Absyn.EpsQuantifier p, A arg) { return visitDefault(p, arg); }
+    public R visit(ap.parser.smtlib.Absyn.LbdQuantifier p, A arg) { return visitDefault(p, arg); }
     public R visitDefault(ap.parser.smtlib.Absyn.Quantifier p, A arg) {
       throw new IllegalArgumentException(this.getClass().getName() + ": " + p);
     }
@@ -136,6 +139,7 @@ public class AbstractVisitor<R,A> implements AllVisitor<R,A> {
     public R visit(ap.parser.smtlib.Absyn.HexConstant p, A arg) { return visitDefault(p, arg); }
     public R visit(ap.parser.smtlib.Absyn.BinConstant p, A arg) { return visitDefault(p, arg); }
     public R visit(ap.parser.smtlib.Absyn.StringConstant p, A arg) { return visitDefault(p, arg); }
+    public R visit(ap.parser.smtlib.Absyn.StringSQConstant p, A arg) { return visitDefault(p, arg); }
     public R visitDefault(ap.parser.smtlib.Absyn.SpecConstant p, A arg) {
       throw new IllegalArgumentException(this.getClass().getName() + ": " + p);
     }
@@ -155,7 +159,8 @@ public class AbstractVisitor<R,A> implements AllVisitor<R,A> {
       throw new IllegalArgumentException(this.getClass().getName() + ": " + p);
     }
 /* IndexC */
-    public R visit(ap.parser.smtlib.Absyn.Index p, A arg) { return visitDefault(p, arg); }
+    public R visit(ap.parser.smtlib.Absyn.NumIndex p, A arg) { return visitDefault(p, arg); }
+    public R visit(ap.parser.smtlib.Absyn.SymIndex p, A arg) { return visitDefault(p, arg); }
     public R visitDefault(ap.parser.smtlib.Absyn.IndexC p, A arg) {
       throw new IllegalArgumentException(this.getClass().getName() + ": " + p);
     }
